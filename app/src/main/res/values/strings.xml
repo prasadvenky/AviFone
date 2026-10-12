@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">AviFone</string>
+    <string name="notification_channel">Listening</string>
+    <string name="notification_title">Listening</string>
+    <string name="notification_text">Microphone → %1$s</string>
+    <string name="notification_stop">Stop</string>
+</resources>

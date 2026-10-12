@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.AviFone" parent="android:Theme.Material.NoActionBar" />
+</resources>
