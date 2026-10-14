@@ -35,7 +35,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,7 +52,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -64,7 +62,6 @@ import com.example.avifone.transcribe.TranscriptLine
 import com.example.avifone.transcribe.TranscriptionController
 import java.text.DateFormat
 import java.util.Date
-import kotlin.math.ceil
 
 @Composable
 fun ConversationScreen(controller: TranscriptionController) {
@@ -102,38 +99,36 @@ fun ConversationScreen(controller: TranscriptionController) {
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        when {
-            !state.firebaseConfigured -> item { NotConfiguredCard() }
-            state.user == null -> item {
-                SignInCard(state.signingIn) { activity?.let(controller::signIn) }
-            }
-            else -> {
-                item { AccountRow(state, controller::signOut) }
-                item { TranscribeButton(state, onToggle) }
-                item { StatusRow(state) }
-            }
-        }
+        // Transcription is fully on-device and needs no account; only the summary does.
+        item { TranscribeButton(state, onToggle) }
+        item { StatusRow(state) }
         state.message?.let { message ->
             item { Text(message, color = MaterialTheme.colorScheme.error) }
         }
-        if (state.user != null) {
-            item { SummaryCard(state.summary, state.summarizing) }
-            if (state.speakers.isNotEmpty()) {
-                item { SpeakerLegend(state.speakers.values.distinctBy { it.label }) { editing = it } }
+        item {
+            SummaryCard(
+                state = state,
+                onSignIn = { activity?.let(controller::signIn) },
+                onSignOut = controller::signOut,
+            )
+        }
+        if (state.speakers.isNotEmpty()) {
+            item { SpeakerLegend(state.speakers.values.distinctBy { it.label }) { editing = it } }
+        }
+        item { TranscriptHeader(hasLines = state.lines.isNotEmpty(), onClear = controller::clearTranscript) }
+        if (state.lines.isEmpty()) {
+            item {
+                Text(
+                    "Each line appears about a second after someone finishes speaking. Speech is " +
+                        "transcribed on this phone, and up to 4 speakers get their own color.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            item { TranscriptHeader(hasLines = state.lines.isNotEmpty(), onClear = controller::clearTranscript) }
-            if (state.lines.isEmpty()) {
-                item {
-                    Text(
-                        "The transcript appears here about ${TranscriptionController.CHUNK_SECONDS} seconds " +
-                            "after people start talking. Up to 4 speakers get their own color.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            items(state.lines, key = { it.id }) { line ->
-                TranscriptRow(line, state.speakers[line.speaker]) { info -> editing = info }
+        }
+        items(state.lines, key = { it.id }) { line ->
+            state.speakers[line.speaker]?.let { speaker ->
+                TranscriptRow(line, speaker) { info -> editing = info }
             }
         }
     }
@@ -160,49 +155,6 @@ fun ConversationScreen(controller: TranscriptionController) {
 }
 
 @Composable
-private fun NotConfiguredCard() {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Firebase isn't set up yet", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Conversation transcription signs in with Google and uses Gemini through Firebase. " +
-                    "Add app/google-services.json from your Firebase project and rebuild (see README).",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SignInCard(signingIn: Boolean, onSignIn: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Transcribe conversations", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Sign in with Google to transcribe what's said around you with Gemini, see who said " +
-                    "what, and get a running summary of the last 15 minutes.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Button(onClick = onSignIn, enabled = !signingIn, modifier = Modifier.fillMaxWidth()) {
-                Text(if (signingIn) "Signing in…" else "Sign in with Google")
-            }
-        }
-    }
-}
-
-@Composable
-private fun AccountRow(state: ConversationUiState, onSignOut: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "Signed in as ${state.user?.email ?: state.user?.name ?: "Google user"}",
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(onClick = onSignOut) { Text("Sign out") }
-    }
-}
-
-@Composable
 private fun TranscribeButton(state: ConversationUiState, onToggle: () -> Unit) {
     Button(
         onClick = onToggle,
@@ -225,28 +177,25 @@ private fun TranscribeButton(state: ConversationUiState, onToggle: () -> Unit) {
 
 @Composable
 private fun StatusRow(state: ConversationUiState) {
-    if (!state.transcribing && state.pendingChunks == 0) return
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (state.transcribing) {
-            val secondsLeft = ceil((1f - state.chunkProgress) * TranscriptionController.CHUNK_SECONDS).toInt()
-            Text(
-                "● Recording · next update in ${secondsLeft}s",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-            LinearProgressIndicator(progress = { state.chunkProgress }, modifier = Modifier.fillMaxWidth())
+    when {
+        state.loadingModels -> Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Text("Loading speech models…", style = MaterialTheme.typography.bodySmall)
         }
-        if (state.pendingChunks > 0) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                Text("Transcribing with Gemini…", style = MaterialTheme.typography.bodySmall)
-            }
-        }
+        state.transcribing -> Text(
+            if (state.speechActive) "● Listening · someone is speaking…" else "● Listening",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
     }
 }
 
 @Composable
-private fun SummaryCard(summary: ConversationSummary?, summarizing: Boolean) {
+private fun SummaryCard(state: ConversationUiState, onSignIn: () -> Unit, onSignOut: () -> Unit) {
+    val summary = state.summary
     var expanded by rememberSaveable { mutableStateOf(true) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -255,7 +204,7 @@ private fun SummaryCard(summary: ConversationSummary?, summarizing: Boolean) {
                 modifier = Modifier.clickable { expanded = !expanded },
             ) {
                 Text("Last 15 minutes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                if (summarizing) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                if (state.summarizing) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                 summary?.let {
                     Text(
                         "  updated ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it.updatedAtMs))}",
@@ -265,6 +214,36 @@ private fun SummaryCard(summary: ConversationSummary?, summarizing: Boolean) {
                 Text(if (expanded) "  ▲" else "  ▼", style = MaterialTheme.typography.labelMedium)
             }
             if (!expanded) return@Column
+            if (!state.firebaseConfigured) {
+                Text(
+                    "The AI summary needs Firebase: add app/google-services.json and rebuild (see " +
+                        "README). Transcription works without it.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                return@Column
+            }
+            val user = state.user
+            if (user == null) {
+                Text(
+                    "Sign in with Google to get an AI summary of the conversation. Only the " +
+                        "transcript text is sent to Gemini; audio stays on this phone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Button(onClick = onSignIn, enabled = !state.signingIn, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (state.signingIn) "Signing in…" else "Sign in with Google")
+                }
+                return@Column
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Signed in as ${user.email ?: user.name ?: "Google user"}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onSignOut) { Text("Sign out") }
+            }
             if (summary == null) {
                 Text(
                     "A summary of the conversation appears here about a minute after transcription starts.",
@@ -314,17 +293,8 @@ private fun TranscriptHeader(hasLines: Boolean, onClear: () -> Unit) {
 }
 
 @Composable
-private fun TranscriptRow(line: TranscriptLine, speaker: SpeakerInfo?, onEdit: (SpeakerInfo) -> Unit) {
+private fun TranscriptRow(line: TranscriptLine, speaker: SpeakerInfo, onEdit: (SpeakerInfo) -> Unit) {
     val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(line.startMs))
-    if (line.isGap || speaker == null) {
-        Text(
-            "$time · couldn't transcribe this part",
-            style = MaterialTheme.typography.bodySmall,
-            fontStyle = FontStyle.Italic,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
     val color = speakerColor(speaker.colorIndex)
     Row(
         Modifier
@@ -361,10 +331,11 @@ private fun ConsentDialog(onAgree: () -> Unit, onDismiss: () -> Unit) {
         title = { Text("Before you start") },
         text = {
             Text(
-                "Microphone audio is sent to Google Gemini to be transcribed and summarized. " +
-                    "Make sure everyone being recorded agrees, and don't use it for confidential, " +
-                    "customer or patient conversations.\n\n" +
-                    "The transcript stays on this phone, only in memory, and only for the last 15 minutes."
+                "Speech is transcribed on this phone; audio never leaves it. If you sign in, the " +
+                    "text of the last 15 minutes is sent to Google Gemini to write the summary.\n\n" +
+                    "Make sure everyone being recorded agrees, and don't use the summary for " +
+                    "confidential, customer or patient conversations. The transcript is kept only " +
+                    "in memory, for the last 15 minutes."
             )
         },
         confirmButton = { TextButton(onClick = onAgree) { Text("I understand") } },

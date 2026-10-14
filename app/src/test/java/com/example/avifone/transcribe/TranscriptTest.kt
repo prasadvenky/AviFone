@@ -8,34 +8,35 @@ import org.junit.Test
 class TranscriptTest {
 
     @Test
-    fun placesSegmentsInWallClockTimeInOrder() {
+    fun keepsLinesInTimeOrder() {
         val t = Transcript()
-        t.addChunk(1_000_000, listOf(ChunkSegment("S2", 5.0, 6.0, "later"), ChunkSegment("S1", 1.0, 2.5, "first")))
+        t.add("S2", "later", startMs = 5_000, endMs = 6_000)
+        t.add("S1", "first", startMs = 1_000, endMs = 2_500)
         assertEquals(listOf("first", "later"), t.all.map { it.text })
-        assertEquals(1_001_000, t.all[0].startMs)
-        assertEquals(1_002_500, t.all[0].endMs)
     }
 
     @Test
     fun pruneDropsLinesOlderThanTheWindow() {
         val t = Transcript(windowMs = 15 * 60_000L)
-        t.addChunk(0, listOf(ChunkSegment("S1", 0.0, 1.0, "old")))
-        t.addChunk(10 * 60_000L, listOf(ChunkSegment("S1", 0.0, 1.0, "recent")))
+        t.add("S1", "old", 0, 1_000)
+        t.add("S1", "recent", 10 * 60_000L, 10 * 60_000L + 1_000)
         assertFalse(t.prune(nowMs = 15 * 60_000L))           // "old" ended 14:59 ago
         assertTrue(t.prune(nowMs = 16 * 60_000L))
         assertEquals(listOf("recent"), t.all.map { it.text })
     }
 
     @Test
-    fun promptTextUsesCurrentNamesAndSkipsGaps() {
+    fun promptTextUsesCurrentNamesAndMerges() {
         val registry = SpeakerRegistry()
         registry.rename("S1", "Priya")
+        registry.merge("S3", "S1")
         val t = Transcript()
-        t.addChunk(0, listOf(ChunkSegment("S1", 0.0, 1.0, "hello"), ChunkSegment("S2", 2.0, 3.0, "hi")))
-        t.addGap(5_000, 35_000)
+        t.add("S1", "hello", 0, 1_000)
+        t.add("S2", "hi", 2_000, 3_000)
+        t.add("S3", "it's me again", 4_000, 5_000)
         val lines = t.toPromptText(registry).lines()
-        assertEquals(2, lines.size)
         assertTrue(lines[0], lines[0].endsWith("Priya: hello"))
         assertTrue(lines[1], lines[1].endsWith("Speaker 2: hi"))
+        assertTrue(lines[2], lines[2].endsWith("Priya: it's me again"))
     }
 }

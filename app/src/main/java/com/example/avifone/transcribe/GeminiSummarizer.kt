@@ -5,11 +5,8 @@ import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.ThinkingLevel
-import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 data class ConversationSummary(
@@ -19,27 +16,14 @@ data class ConversationSummary(
     val updatedAtMs: Long,
 )
 
-/** Calls Gemini through Firebase AI Logic (Gemini Developer API backend). */
-class GeminiTranscriber {
+/**
+ * The only cloud call in the conversation feature: summarizes transcript *text* with
+ * Gemini through Firebase AI Logic. Audio never leaves the device.
+ */
+class GeminiSummarizer {
 
-    private val ai by lazy { Firebase.ai(backend = GenerativeBackend.googleAI()) }
-
-    private val transcribeModel by lazy {
-        ai.generativeModel(
-            modelName = MODEL,
-            generationConfig = generationConfig {
-                responseMimeType = "application/json"
-                responseSchema = SEGMENTS_SCHEMA
-                temperature = 0f
-                // Transcription needs no reasoning; thinking only adds latency, and each
-                // 30 s chunk must come back in well under 30 s to keep up.
-                thinkingConfig = thinkingConfig { thinkingLevel = ThinkingLevel.MINIMAL }
-            },
-        )
-    }
-
-    private val summaryModel by lazy {
-        ai.generativeModel(
+    private val model by lazy {
+        Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
             modelName = MODEL,
             generationConfig = generationConfig {
                 responseMimeType = "application/json"
@@ -50,21 +34,12 @@ class GeminiTranscriber {
         )
     }
 
-    suspend fun transcribe(request: ChunkRequest): List<ChunkSegment> {
-        val prompt = withContext(Dispatchers.Default) {
-            content {
-                inlineData(request.wav(), "audio/wav")
-                text(request.prompt())
-            }
-        }
-        val text = transcribeModel.generateContent(prompt).text ?: return emptyList()
-        return request.parse(text)
-    }
-
     suspend fun summarize(transcript: String, nowMs: Long): ConversationSummary {
         val prompt = """
             Below is the transcript of the last (up to) 15 minutes of a conversation, one line
-            per utterance as "[time] speaker: text". Summarize it for someone who just joined.
+            per utterance as "[time] speaker: text". It was produced by on-device speech
+            recognition, so expect some misheard words; infer the intended meaning.
+            Summarize it for someone who just joined.
             - topic: one short line saying what the conversation is about.
             - points: up to 6 concise key points, naming who said what where it matters.
             - actionItems: decisions, open questions or to-dos; empty if there are none.
@@ -72,7 +47,7 @@ class GeminiTranscriber {
 
             $transcript
         """.trimIndent()
-        val json = JSONObject(summaryModel.generateContent(prompt).text?.trim().orEmpty().ifEmpty { "{}" })
+        val json = JSONObject(model.generateContent(prompt).text?.trim().orEmpty().ifEmpty { "{}" })
         return ConversationSummary(
             topic = json.optString("topic"),
             points = json.optJSONArray("points").strings(),
@@ -87,21 +62,6 @@ class GeminiTranscriber {
     companion object {
         /** Stable Flash model available through Firebase AI Logic. */
         const val MODEL = "gemini-3.5-flash"
-
-        private val SEGMENTS_SCHEMA = Schema.obj(
-            mapOf(
-                "segments" to Schema.array(
-                    Schema.obj(
-                        mapOf(
-                            "speaker" to Schema.enumeration(SpeakerRegistry.LABELS),
-                            "start" to Schema.double("Start time in seconds from the beginning of the audio"),
-                            "end" to Schema.double("End time in seconds from the beginning of the audio"),
-                            "text" to Schema.string("Exactly what was said"),
-                        )
-                    )
-                )
-            )
-        )
 
         private val SUMMARY_SCHEMA = Schema.obj(
             mapOf(

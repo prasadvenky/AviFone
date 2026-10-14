@@ -11,8 +11,6 @@ data class TranscriptLine(
     val text: String,
     val startMs: Long,
     val endMs: Long,
-    /** A stretch of audio that couldn't be transcribed (shown as a gap row). */
-    val isGap: Boolean = false,
 )
 
 /** Rolling, memory-only transcript of the last [windowMs] of conversation. */
@@ -22,21 +20,8 @@ class Transcript(private val windowMs: Long = WINDOW_MS) {
 
     val all: List<TranscriptLine> get() = lines.toList()
 
-    fun addChunk(chunkStartMs: Long, segments: List<ChunkSegment>) {
-        for (s in segments) {
-            lines += TranscriptLine(
-                id = nextId++,
-                speaker = s.speaker,
-                text = s.text,
-                startMs = chunkStartMs + (s.start * 1000).toLong(),
-                endMs = chunkStartMs + (s.end * 1000).toLong(),
-            )
-        }
-        lines.sortBy { it.startMs }
-    }
-
-    fun addGap(startMs: Long, endMs: Long) {
-        lines += TranscriptLine(nextId++, speaker = "", text = "", startMs = startMs, endMs = endMs, isGap = true)
+    fun add(speaker: String, text: String, startMs: Long, endMs: Long) {
+        lines += TranscriptLine(nextId++, speaker, text, startMs, endMs)
         lines.sortBy { it.startMs }
     }
 
@@ -48,7 +33,7 @@ class Transcript(private val windowMs: Long = WINDOW_MS) {
     /** "[10:42] Priya: text" lines for the summary prompt, with merges and names applied. */
     fun toPromptText(registry: SpeakerRegistry): String {
         val clock = SimpleDateFormat("HH:mm", Locale.US)
-        return lines.filter { !it.isGap }.joinToString("\n") {
+        return lines.joinToString("\n") {
             "[${clock.format(Date(it.startMs))}] ${registry.speaker(it.speaker).name}: ${it.text}"
         }
     }
