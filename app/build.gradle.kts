@@ -101,8 +101,8 @@ android {
         applicationId = "com.example.avifone"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "3.0"
+        versionCode = 4
+        versionName = "3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
@@ -179,6 +179,8 @@ dependencies {
     // access to Gemini Nano on phones that have it.
     implementation(libs.litertlm.android)
     implementation(libs.mlkit.genai.prompt)
+    // Unpacks the tar.bz2 speech-model archives from the sherpa-onnx GitHub releases.
+    implementation(libs.commons.compress)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.ai)
     implementation(libs.firebase.auth)

@@ -30,9 +30,14 @@ bar switches between Listen, Transcribe and Settings.
 
 ### Transcribe tab
 
-- Tap **Start transcribing**. Speech is turned into text **on the phone** with small open
-  models, so it works offline and audio never leaves the device. It works with or without
-  headphone listening; when both are on, they share the same microphone stream.
+- Tap **Start transcribing**. Speech is turned into text **on the phone** with open models,
+  so it works offline and audio never leaves the device. It works with or without headphone
+  listening; when both are on, they share the same microphone stream.
+- **Choose the speech model in Settings.** Moonshine tiny (English) is built in. For better
+  accuracy, accents and other languages, download one once into app storage: **Nemotron 3.5**
+  (the default once downloaded; 475 MB; 40 languages including English and Hindi), Whisper
+  small (375 MB) or Whisper large-v3-turbo (1 GB, needs a recent phone). A language setting
+  (English, Hindi, or detect per utterance) steers the downloaded models.
 - A line appears about a second after each person finishes speaking.
 - **Up to 4 speakers**, each with their own color, told apart on the phone by their voice.
   Tap a speaker to rename them, or to merge them into another speaker if one person was
@@ -51,7 +56,10 @@ bar switches between Listen, Transcribe and Settings.
 
 | On-device model | Size | License |
 |---|---|---|
-| [Moonshine](https://github.com/moonshine-ai/moonshine) tiny English (v2, quantized): speech to text | ~44 MB | MIT |
+| [Moonshine](https://github.com/moonshine-ai/moonshine) tiny English (v2, quantized): speech to text, built in | ~44 MB | MIT |
+| [NVIDIA Nemotron 3.5 ASR streaming 0.6B](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) (int8, sherpa-onnx export): speech to text, 40 languages | 475 MB download, 682 MB installed | NVIDIA Open Model License |
+| [Whisper small](https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small) (int8): speech to text, 99 languages | 375 MB download | MIT |
+| [Whisper large-v3-turbo](https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo) (int8): speech to text, 99 languages | 1.04 GB download | MIT |
 | [Silero VAD](https://github.com/snakers4/silero-vad): detects when someone is talking | 0.6 MB | MIT |
 | NVIDIA NeMo SpeakerNet: voice fingerprints for telling speakers apart | 23 MB | Apache-2.0 (NeMo) |
 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 1.13.8 runtime (with ONNX Runtime) | ~24 MB native | Apache-2.0 |
@@ -59,9 +67,10 @@ bar switches between Listen, Transcribe and Settings.
 | [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) 0.18 runtime | ~20 MB native | Apache-2.0 |
 | Gemini Nano via [ML Kit GenAI](https://developers.google.com/ml-kit/genai) | provided by Android | Google APIs terms |
 
-The speech models are downloaded and checksum-verified at build time and bundled into the
-APK, so the release APK is about 130 MB. The Local AI summary model is downloaded by the
-app on first use (resumable, SHA-256 verified) into app storage. English only.
+The built-in speech models are downloaded and checksum-verified at build time and bundled
+into the APK, so the release APK is about 130 MB. The larger speech models and the Local AI
+summary model are downloaded by the app on first use (resumable, SHA-256 verified) into app
+storage, and can be deleted in Settings.
 
 Wired or USB-C headphones give the lowest latency (typically about 10–30 ms). Bluetooth adds
 100–300 ms that no app can remove.
@@ -87,8 +96,11 @@ Then build and install:
 ./gradlew assembleRelease          # app/build/outputs/apk/release/app-release.apk
 ./gradlew installDebug             # install on a connected phone
 ./gradlew testDebugUnitTest        # JVM unit tests
-./gradlew connectedDebugAndroidTest  # on-device speech test (emulator or phone)
+./gradlew connectedDebugAndroidTest  # on-device speech tests (emulator or phone)
 ```
+
+`tools/eval_asr.py` measures word error rate of the same pipeline on the laptop, for any of
+the four models (see `tools/README.md`); `WerTest` does the same on the device.
 
 Toolchain: AGP 9.4, Gradle 9.8, Kotlin 2.4, Jetpack Compose, NDK 30, CMake 4.1, Oboe 1.11,
 Firebase BoM 35, compileSdk 37.
@@ -119,7 +131,9 @@ Configure your own release keystore before publishing.
 | `app/src/main/java/.../AudioEngine.kt` | Kotlin wrapper around the native engine |
 | `app/src/main/java/.../ListenController.kt` | App-wide session state: headphone detection, route changes, settings |
 | `app/src/main/java/.../ListenService.kt` | Microphone foreground service, wake lock and notification |
-| `app/src/main/java/.../transcribe/local/` | On-device speech-to-text and speaker clustering (sherpa-onnx) |
+| `app/src/main/java/.../transcribe/local/` | On-device speech-to-text (VAD, the pluggable text recognizers) and speaker clustering (sherpa-onnx) |
+| `app/src/main/java/.../transcribe/speech/` | Speech model catalogue and downloads (Nemotron, Whisper) |
+| `tools/` | Desktop accuracy harness and the Svarah subset builder |
 | `app/src/main/java/.../transcribe/` | Conversation session, transcript, speaker names, summary prompt and parsing, Gemini summary, sign-in |
 | `app/src/main/java/.../transcribe/llm/` | Local AI summary: model download with resume, LiteRT-LM and Gemini Nano summarizers |
 | `app/src/main/java/.../ui/` | Compose UI: bottom navigation bar, Listen, Transcribe and Settings screens |

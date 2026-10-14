@@ -34,12 +34,14 @@ enum class LocalEngine {
     LITERT,
 }
 
-/** Lifecycle of the on-device summary model. */
+/** Lifecycle of a downloadable on-device model (the summary LLM and the speech models). */
 sealed interface LocalModelState {
     data object Probing : LocalModelState
     data class NotDownloaded(val resumeBytes: Long, val totalBytes: Long?) : LocalModelState
     data class Downloading(val bytes: Long, val totalBytes: Long?) : LocalModelState
     data object Verifying : LocalModelState
+    /** Unpacking an archive after the download was verified. */
+    data object Installing : LocalModelState
     data object Ready : LocalModelState
     data class Failed(val reason: String, val resumeBytes: Long) : LocalModelState
 }

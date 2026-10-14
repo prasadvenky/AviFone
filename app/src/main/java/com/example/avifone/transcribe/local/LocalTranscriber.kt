@@ -2,10 +2,7 @@ package com.example.avifone.transcribe.local
 
 import android.content.res.AssetManager
 import android.util.Log
-import com.k2fsa.sherpa.onnx.OfflineModelConfig
-import com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig
-import com.k2fsa.sherpa.onnx.OfflineRecognizer
-import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.example.avifone.transcribe.speech.SpeechModelCatalog
 import com.k2fsa.sherpa.onnx.SileroVadModelConfig
 import com.k2fsa.sherpa.onnx.SpeakerEmbeddingExtractor
 import com.k2fsa.sherpa.onnx.SpeakerEmbeddingExtractorConfig
@@ -16,15 +13,21 @@ import com.k2fsa.sherpa.onnx.VadModelConfig
 data class LocalUtterance(val speaker: String, val text: String, val startSample: Long, val endSample: Long)
 
 /**
- * On-device speech-to-text with speaker labels (sherpa-onnx, models bundled in assets/models):
+ * On-device speech-to-text with speaker labels (sherpa-onnx):
  *
  *   16 kHz audio -> Silero VAD (cuts utterances at pauses)
- *                -> Moonshine tiny (text)  +  NeMo SpeakerNet (voice embedding)
+ *                -> [TextRecognizer] (text)  +  NeMo SpeakerNet (voice embedding)
  *                -> SpeakerClusterer (S1..S4)
  *
- * Not thread-safe: create and use it from one thread. Loading takes a second or two.
+ * The VAD and SpeakerNet are bundled in assets/models; the recognizer is whichever model the
+ * user chose (built-in Moonshine tiny, or a downloaded one) and can be swapped between
+ * utterances with [setRecognizer]. Not thread-safe: create and use it from one thread.
  */
-class LocalTranscriber(assets: AssetManager, val clusterer: SpeakerClusterer = SpeakerClusterer()) : AutoCloseable {
+class LocalTranscriber(
+    assets: AssetManager,
+    recognizer: TextRecognizer = MoonshineRecognizer(assets, SpeechModelCatalog.MOONSHINE_TINY.id),
+    val clusterer: SpeakerClusterer = SpeakerClusterer(),
+) : AutoCloseable {
 
     private val vad = Vad(
         assets,
@@ -45,19 +48,8 @@ class LocalTranscriber(assets: AssetManager, val clusterer: SpeakerClusterer = S
         ),
     )
 
-    private val recognizer = OfflineRecognizer(
-        assets,
-        OfflineRecognizerConfig(
-            modelConfig = OfflineModelConfig(
-                moonshine = OfflineMoonshineModelConfig(
-                    encoder = "models/moonshine/encoder_model.ort",
-                    mergedDecoder = "models/moonshine/decoder_model_merged.ort",
-                ),
-                tokens = "models/moonshine/tokens.txt",
-                numThreads = 2,
-            ),
-        ),
-    )
+    var recognizer: TextRecognizer = recognizer
+        private set
 
     private val embeddings = SpeakerEmbeddingExtractor(
         assets,
@@ -68,11 +60,25 @@ class LocalTranscriber(assets: AssetManager, val clusterer: SpeakerClusterer = S
     private val window = FloatArray(WINDOW)
     private var windowFill = 0
 
+    // The last few seconds given to the VAD, so a segment can start a little before the
+    // detector's cut (TextRecognizer.preRollSeconds). Segment positions count these samples.
+    private val history = FloatArray(HISTORY_SECONDS * SAMPLE_RATE)
+    private var fedToVad = 0L
+    private var lastSegmentEnd = 0L  // pre-roll never reaches into the previous utterance
+
     /** Total samples fed so far; utterance positions are on this same running count. */
     var samplesAccepted = 0L
         private set
 
     val isSpeechDetected: Boolean get() = vad.isSpeechDetected()
+
+    /** Replaces the text model; the old one is closed. Takes effect from the next utterance. */
+    fun setRecognizer(next: TextRecognizer) {
+        if (next === recognizer) return
+        val old = recognizer
+        recognizer = next
+        old.close()
+    }
 
     /** Feeds 16 kHz mono audio; returns any utterances that finished. */
     fun accept(samples: FloatArray, count: Int = samples.size): List<LocalUtterance> {
@@ -85,12 +91,32 @@ class LocalTranscriber(assets: AssetManager, val clusterer: SpeakerClusterer = S
             windowFill += n
             offset += n
             if (windowFill == WINDOW) {
-                vad.acceptWaveform(window.copyOf())
-                windowFill = 0
+                feedWindow()
                 drain(done)
             }
         }
         return done
+    }
+
+    private fun feedWindow() {
+        vad.acceptWaveform(window.copyOf())
+        val at = (fedToVad % history.size).toInt()
+        val first = minOf(WINDOW, history.size - at)
+        window.copyInto(history, at, 0, first)
+        if (first < WINDOW) window.copyInto(history, 0, first, WINDOW)
+        fedToVad += WINDOW
+        windowFill = 0
+    }
+
+    /** [segment] with up to [preRollSeconds] of the audio that preceded it. */
+    private fun withPreRoll(segment: FloatArray, start: Long, preRollSeconds: Float): FloatArray {
+        val from = maxOf(start - (preRollSeconds * SAMPLE_RATE).toLong(), fedToVad - history.size, lastSegmentEnd)
+        val n = (start - from).toInt()
+        if (n <= 0) return segment
+        val out = FloatArray(n + segment.size)
+        for (i in 0 until n) out[i] = history[((from + i) % history.size).toInt()]
+        segment.copyInto(out, n)
+        return out
     }
 
     /**
@@ -109,8 +135,7 @@ class LocalTranscriber(assets: AssetManager, val clusterer: SpeakerClusterer = S
         if (windowFill > 0) {  // the VAD only takes whole windows; pad the last one
             window.fill(0f, windowFill)
             samplesAccepted += WINDOW - windowFill
-            windowFill = 0
-            vad.acceptWaveform(window.copyOf())
+            feedWindow()
             drain(done)
         }
         vad.flush()
@@ -122,32 +147,36 @@ class LocalTranscriber(assets: AssetManager, val clusterer: SpeakerClusterer = S
         while (!vad.empty()) {
             val segment = vad.front()  // returns a copy, safe to use after pop()
             vad.pop()
-            transcribe(segment.samples, segment.start.toLong())?.let(out::add)
+            val start = segment.start.toLong()
+            val samples = withPreRoll(segment.samples, start, recognizer.preRollSeconds)
+            lastSegmentEnd = start + segment.samples.size
+            transcribe(samples, start, segment.samples.size)?.let(out::add)
         }
     }
 
     /**
      * Text for one segment of any length. The VAD's maxSpeechDuration is a soft target (it only
-     * lowers the pause it needs to cut), so the recognizer's limit is enforced here: an over-long
-     * segment is decoded in equal pieces and the text joined.
+     * lowers the pause it needs to cut), so the recognizer's own limit is enforced here: an
+     * over-long segment is decoded in equal pieces and the text joined.
      */
     internal fun recognizeText(samples: FloatArray): String {
-        val maxSamples = (MAX_SEGMENT_SECONDS * SAMPLE_RATE).toInt()
+        val maxSamples = (recognizer.maxSegmentSeconds * SAMPLE_RATE).toInt()
         val pieces = (samples.size + maxSamples - 1) / maxSamples
-        if (pieces <= 1) return recognize(samples)
+        if (pieces <= 1) return recognizer.transcribe(samples)
         val pieceSize = (samples.size + pieces - 1) / pieces
         return (0 until pieces).joinToString(" ") { i ->
-            recognize(samples.copyOfRange(i * pieceSize, minOf((i + 1) * pieceSize, samples.size)))
+            recognizer.transcribe(samples.copyOfRange(i * pieceSize, minOf((i + 1) * pieceSize, samples.size)))
         }.trim()
     }
 
-    private fun transcribe(samples: FloatArray, start: Long): LocalUtterance? {
-        val text = recognizeText(samples)  // the speaker embedding below uses the whole segment
-        val seconds = samples.size.toDouble() / SAMPLE_RATE
+    /** [samples] may carry pre-roll; [length] is the detected speech, which the timestamps cover. */
+    private fun transcribe(samples: FloatArray, start: Long, length: Int): LocalUtterance? {
+        val text = recognizeText(samples)
+        val seconds = length.toDouble() / SAMPLE_RATE
         if (text.none { it.isLetterOrDigit() }) {
             // A second or more of detected speech with no words is the signature of a decode
             // failure rather than a cough, so leave a trace in the log.
-            if (seconds >= 1.0) Log.w(TAG, "Recognizer returned nothing for a %.1f s segment".format(seconds))
+            if (seconds >= 1.0) Log.w(TAG, "${recognizer.modelId} returned nothing for a %.1f s segment".format(seconds))
             return null
         }
 
@@ -161,30 +190,22 @@ class LocalTranscriber(assets: AssetManager, val clusterer: SpeakerClusterer = S
             }
         }
         val speaker = embedding?.let { clusterer.assign(it, seconds) } ?: SpeakerClusterer.LABELS.first()
-        return LocalUtterance(speaker, text, start, start + samples.size)
-    }
-
-    private fun recognize(samples: FloatArray): String = recognizer.createStream().let { stream ->
-        try {
-            stream.acceptWaveform(samples, SAMPLE_RATE)
-            recognizer.decode(stream)
-            recognizer.getResult(stream).text.trim()
-        } finally {
-            stream.release()
-        }
+        return LocalUtterance(speaker, text, start, start + length)
     }
 
     override fun close() {
         vad.release()
-        recognizer.release()
+        recognizer.close()
         embeddings.release()
     }
 
     companion object {
         private const val TAG = "LocalSpeech"
         const val SAMPLE_RATE = 16_000
-        /** Longest utterance handed to the recognizer; the VAD force-splits beyond this. */
+        /** Utterance length the VAD aims for; recognizers enforce their own hard limits. */
         const val MAX_SEGMENT_SECONDS = 8f
         private const val WINDOW = 512
+        /** Must cover a maximal segment plus its trailing pause plus the longest pre-roll. */
+        private const val HISTORY_SECONDS = 12
     }
 }

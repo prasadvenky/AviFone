@@ -201,6 +201,17 @@ private fun StatusRow(state: ConversationUiState) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
+            state.activeSpeechModel?.let { active ->
+                Text(
+                    if (active != state.speechModel) {
+                        "${active.displayName} · download ${state.speechModel.displayName} in Settings"
+                    } else {
+                        active.displayName
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             MicLevelMeter(state.micLevel)
             if (state.audioDropped) {
                 Text(
@@ -415,6 +426,7 @@ private fun LocalSection(
             }
         }
         LocalModelState.Verifying -> ProgressLine("Verifying the download…")
+        LocalModelState.Installing -> ProgressLine("Unpacking…")  // archives: speech models only
         is LocalModelState.Failed -> {
             Text("Download failed: ${model.reason}", color = MaterialTheme.colorScheme.error)
             Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) { Text("Retry") }

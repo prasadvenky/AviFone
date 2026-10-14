@@ -13,3 +13,6 @@
 
 # Per-developer Firebase config (see README)
 /app/google-services.json
+
+# Desktop speech-model harness (tools/README.md)
+/.venv/

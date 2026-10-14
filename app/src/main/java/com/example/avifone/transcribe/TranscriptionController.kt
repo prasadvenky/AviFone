@@ -10,6 +10,11 @@ import com.example.avifone.ListenController
 import com.example.avifone.transcribe.llm.LocalModelManager
 import com.example.avifone.transcribe.local.LocalTranscriber
 import com.example.avifone.transcribe.local.LocalUtterance
+import com.example.avifone.transcribe.local.TextRecognizer
+import com.example.avifone.transcribe.speech.SpeechLanguage
+import com.example.avifone.transcribe.speech.SpeechModel
+import com.example.avifone.transcribe.speech.SpeechModelCatalog
+import com.example.avifone.transcribe.speech.SpeechModelManager
 import com.google.ai.edge.litertlm.LiteRtLmJniException
 import com.google.firebase.ai.type.QuotaExceededException
 import kotlinx.coroutines.CancellationException
@@ -49,6 +54,13 @@ data class ConversationUiState(
     val micSilent: Boolean = false,
     /** The native capture buffer overflowed during this session, so some audio was never heard. */
     val audioDropped: Boolean = false,
+    /** The speech model chosen in Settings; it may not be downloaded yet. */
+    val speechModel: SpeechModel = SpeechModelCatalog.DEFAULT,
+    val speechLanguage: SpeechLanguage = SpeechLanguage.ENGLISH,
+    /** Download state of every model in the catalogue, by id. */
+    val speechModels: Map<String, LocalModelState> = emptyMap(),
+    /** The model actually loaded for transcription: the built-in one until the chosen model is downloaded. */
+    val activeSpeechModel: SpeechModel? = null,
     val lines: List<TranscriptLine> = emptyList(),
     /** Every label used in [lines] (including merged ones) -> who it is now. */
     val speakers: Map<String, SpeakerInfo> = emptyMap(),
@@ -88,7 +100,9 @@ class TranscriptionController private constructor(private val context: Context) 
     private val speechThread = Executors.newSingleThreadExecutor { Thread(it, "local-speech") }
         .asCoroutineDispatcher()
     private var transcriber: LocalTranscriber? = null  // speech thread only; kept across sessions
+    private var loadedLanguage: SpeechLanguage? = null  // speech thread only
     private val localModels = LocalModelManager(context, scope)
+    private val speechModels = SpeechModelManager(context, scope)
 
     private val registry = SpeakerRegistry()
     private val transcript = Transcript()
@@ -104,6 +118,9 @@ class TranscriptionController private constructor(private val context: Context) 
             consentGiven = prefs.getBoolean(KEY_CONSENT, false),
             summaryMode = SummaryMode.fromPref(prefs.getString(KEY_SUMMARY_MODE, null))
                 ?: if (auth.isConfigured) SummaryMode.CLOUD else SummaryMode.LOCAL,
+            speechModel = SpeechModelCatalog.byId(prefs.getString(KEY_SPEECH_MODEL, null)) ?: SpeechModelCatalog.DEFAULT,
+            speechLanguage = SpeechLanguage.fromPref(prefs.getString(KEY_SPEECH_LANGUAGE, null)) ?: SpeechLanguage.ENGLISH,
+            speechModels = speechModels.states.value,
         )
     )
     val state: StateFlow<ConversationUiState> = _state
@@ -129,7 +146,86 @@ class TranscriptionController private constructor(private val context: Context) 
                 }
             }
         }
+        scope.launch {
+            speechModels.states.collect { states ->
+                _state.update { it.copy(speechModels = states) }
+                // A download finished or a model was deleted: the effective model may have changed.
+                applyRecognizer()
+            }
+        }
         if (_state.value.summaryMode == SummaryMode.LOCAL) localModels.probe()
+    }
+
+    // ---- Speech model (Settings) ----
+
+    /** Chooses the model for transcription; takes effect from the next utterance if running. */
+    fun setSpeechModel(model: SpeechModel) {
+        if (_state.value.speechModel == model) return
+        prefs.edit { putString(KEY_SPEECH_MODEL, model.id) }
+        _state.update { it.copy(speechModel = model) }
+        applyRecognizer()
+    }
+
+    fun setSpeechLanguage(language: SpeechLanguage) {
+        if (_state.value.speechLanguage == language) return
+        prefs.edit { putString(KEY_SPEECH_LANGUAGE, language.code) }
+        _state.update { it.copy(speechLanguage = language) }
+        applyRecognizer()
+    }
+
+    fun downloadSpeechModel(id: String) = speechModels.download(id)
+
+    fun cancelSpeechDownload(id: String) = speechModels.cancel(id)
+
+    fun deleteSpeechModel(id: String) = speechModels.delete(id)
+
+    /** This phone's RAM, so Settings can warn before a model that won't fit. */
+    val totalRamMb: Int get() = speechModels.totalRamMb
+
+    /** The model that should be transcribing now: the chosen one if installed, else the built-in. */
+    private fun effectiveModel(): SpeechModel {
+        val chosen = _state.value.speechModel
+        return if (speechModels.isInstalled(chosen)) chosen else SpeechModelCatalog.MOONSHINE_TINY
+    }
+
+    /** Speech thread. Builds the recognizer for the effective model; falls back to the built-in one. */
+    private fun loadRecognizer(): TextRecognizer {
+        val model = effectiveModel()
+        val language = _state.value.speechLanguage
+        return try {
+            TextRecognizer.create(model, context.assets, speechModels.dir(model), language).also {
+                loadedLanguage = language
+                _state.update { it.copy(activeSpeechModel = model) }
+            }
+        } catch (e: Exception) {
+            if (model.builtIn) throw e
+            Log.e(TAG, "Couldn't load ${model.id}", e)
+            _state.update {
+                it.copy(message = "Couldn't load ${model.displayName} (${e.message}); using ${SpeechModelCatalog.MOONSHINE_TINY.displayName}")
+            }
+            val fallback = SpeechModelCatalog.MOONSHINE_TINY
+            TextRecognizer.create(fallback, context.assets, speechModels.dir(fallback), language).also {
+                _state.update { it.copy(activeSpeechModel = fallback) }
+            }
+        }
+    }
+
+    /** Speech thread. Swaps the transcriber's recognizer if the effective model or language changed. */
+    private fun ensureRecognizer(engine: LocalTranscriber) {
+        val model = effectiveModel()
+        val current = engine.recognizer
+        if (current.modelId == model.id && (model.builtIn || loadedLanguage == _state.value.speechLanguage)) return
+        _state.update { it.copy(loadingModels = true) }
+        try {
+            engine.setRecognizer(loadRecognizer())
+        } finally {
+            _state.update { it.copy(loadingModels = false) }
+        }
+    }
+
+    /** Applies a model/language change to a transcriber that already exists; pump() handles the rest. */
+    private fun applyRecognizer() {
+        scope.launch(speechThread) { transcriber?.let(::ensureRecognizer) }
     }
 
     fun signIn(activity: Activity) {
@@ -246,7 +342,10 @@ class TranscriptionController private constructor(private val context: Context) 
 
     private suspend fun pump() {
         val engine = try {
-            withContext(speechThread) { transcriber ?: LocalTranscriber(context.assets).also { transcriber = it } }
+            withContext(speechThread) {
+                (transcriber ?: LocalTranscriber(context.assets, loadRecognizer()).also { transcriber = it })
+                    .also(::ensureRecognizer)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -379,6 +478,8 @@ class TranscriptionController private constructor(private val context: Context) 
         // New key: the local version's consent text differs from the Gemini-audio one.
         private const val KEY_CONSENT = "transcribe_consent_local"
         private const val KEY_SUMMARY_MODE = "summary_mode"
+        private const val KEY_SPEECH_MODEL = "speech_model"
+        private const val KEY_SPEECH_LANGUAGE = "speech_language"
         private const val READ_BLOCK = 4096
         private const val PUMP_INTERVAL_MS = 200L
         /** -54 dBFS: below this the microphone is treated as delivering nothing. */

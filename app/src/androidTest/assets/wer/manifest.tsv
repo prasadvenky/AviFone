@@ -1,0 +1,18 @@
+# file	start_s	end_s	text  (paths relative to androidTest/assets; empty start/end = whole file)
+# Smoke set: the synthetic 4-voice recording, one line per turn.
+conversation4_16k.wav	0.000	6.900	Okay everyone, let's plan the hiking trip for next Saturday. I was thinking we try the lake trail this time.
+conversation4_16k.wav	7.600	13.069	The lake trail sounds great, but it's pretty long. How many miles is it in total?
+conversation4_16k.wav	13.769	18.934	It's about eleven miles round trip. I did it last spring and it took us most of the day.
+conversation4_16k.wav	19.634	26.707	Eleven miles is fine for me, as long as we start early. Maybe we leave at seven in the morning?
+conversation4_16k.wav	27.407	32.712	Seven works for me. Ben, can you drive? Your car has the most room for four people.
+conversation4_16k.wav	33.412	40.126	Sure, I can drive. I'll pick everyone up, starting with Callum since he lives closest to the highway.
+conversation4_16k.wav	40.826	45.511	Thanks Ben. I'll bring the big cooler and some sandwiches for lunch at the lake.
+conversation4_16k.wav	46.211	52.010	I can bring water and snacks. Does anyone have a water filter, in case we run out?
+conversation4_16k.wav	52.710	57.400	I have one. I'll also check the weather forecast on Thursday and send it to the group.
+conversation4_16k.wav	58.100	63.258	Good idea. If it looks like rain, we could do the shorter canyon trail instead.
+conversation4_16k.wav	63.958	69.833	The canyon trail is nice too, and it's only five miles. Either way, we should bring rain jackets.
+conversation4_16k.wav	70.533	77.377	Agreed. So the plan is seven a.m. pickup, lake trail if it's sunny, canyon trail if it rains.
+conversation4_16k.wav	78.077	82.822	Perfect. And let's try to be back by five, because I have dinner plans that evening.
+conversation4_16k.wav	83.522	88.143	That should be easy. Eleven miles with a lunch break is about seven hours.
+conversation4_16k.wav	88.843	92.718	Then we're all set. I'll make a packing list and share it tonight.
+conversation4_16k.wav	93.418	97.264	Great, thanks everyone. See you all on Saturday.
