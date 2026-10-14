@@ -242,13 +242,16 @@ class TranscriptionController private constructor(private val context: Context) 
         try {
             val summary = summarizer.summarize(text, System.currentTimeMillis())
             summarizedVersion = version
-            _state.update { it.copy(summary = summary) }
+            // A success supersedes an earlier summary error; leave other messages alone.
+            _state.update {
+                it.copy(summary = summary, message = it.message?.takeUnless { m -> m.startsWith(SUMMARY_ERROR) })
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "Summary failed", e)
             val reason = if (e is QuotaExceededException) "Gemini quota reached; will retry" else e.message
-            _state.update { it.copy(message = "Summary: $reason") }
+            _state.update { it.copy(message = "$SUMMARY_ERROR$reason") }
         } finally {
             _state.update { it.copy(summarizing = false) }
         }
@@ -270,6 +273,7 @@ class TranscriptionController private constructor(private val context: Context) 
         private const val READ_BLOCK = 4096
         private const val PUMP_INTERVAL_MS = 200L
         private const val SUMMARY_INTERVAL_MS = 60_000L
+        private const val SUMMARY_ERROR = "Summary: "
 
         // Holds only the application context, so this can't leak an activity.
         @SuppressLint("StaticFieldLeak")
