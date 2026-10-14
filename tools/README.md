@@ -50,6 +50,9 @@ Results on the committed synthetic set (16 turns, 87 s, flite voices; laptop, 8 
 | nemotron-3.5-560ms | 6.1 % | 0.28 |
 | whisper-small | 6.9 % (0.5 s pre-roll) | 0.31 |
 
+On the x86_64 emulator (`WerTest`): Moonshine 16.4 %, Nemotron 6.9 %, Whisper small 9.5 %, the
+two large models at RTF ~0.5.
+
 Synthetic voices are not Indian English; they only show the pipeline is sound. For the real
 question, run the Svarah benchmark below.
 

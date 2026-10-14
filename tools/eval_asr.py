@@ -175,6 +175,8 @@ def run_clip(vad, rec, audio, pre_roll=0.0):
             samples = np.array(seg.samples, dtype=np.float32)  # copy before pop()
             start = seg.start
             vad.pop()
+            if len(samples) < SAMPLE_RATE // 10:
+                continue  # degenerate VAD segment ("Invalid n"); Whisper crashes on empty input
             if pre:
                 samples = np.concatenate([audio[max(0, start - pre):start], samples])
             text = rec.transcribe(samples)

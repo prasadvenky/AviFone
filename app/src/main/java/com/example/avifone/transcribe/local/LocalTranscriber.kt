@@ -147,6 +147,9 @@ class LocalTranscriber(
         while (!vad.empty()) {
             val segment = vad.front()  // returns a copy, safe to use after pop()
             vad.pop()
+            // The VAD occasionally emits a degenerate (empty or tiny) segment after logging
+            // "Invalid n"; recognizers can't use it and Whisper crashes on empty input.
+            if (segment.samples.size < MIN_SEGMENT_SAMPLES) continue
             val start = segment.start.toLong()
             val samples = withPreRoll(segment.samples, start, recognizer.preRollSeconds)
             lastSegmentEnd = start + segment.samples.size
@@ -160,6 +163,7 @@ class LocalTranscriber(
      * over-long segment is decoded in equal pieces and the text joined.
      */
     internal fun recognizeText(samples: FloatArray): String {
+        if (samples.size < MIN_SEGMENT_SAMPLES) return ""
         val maxSamples = (recognizer.maxSegmentSeconds * SAMPLE_RATE).toInt()
         val pieces = (samples.size + maxSamples - 1) / maxSamples
         if (pieces <= 1) return recognizer.transcribe(samples)
@@ -205,6 +209,8 @@ class LocalTranscriber(
         /** Utterance length the VAD aims for; recognizers enforce their own hard limits. */
         const val MAX_SEGMENT_SECONDS = 8f
         private const val WINDOW = 512
+        /** 0.1 s: shorter than any word; guards the recognizers against degenerate segments. */
+        private const val MIN_SEGMENT_SAMPLES = SAMPLE_RATE / 10
         /** Must cover a maximal segment plus its trailing pause plus the longest pre-roll. */
         private const val HISTORY_SECONDS = 12
     }
