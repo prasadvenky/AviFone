@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-AviFone is an Android app with two tabs:
+AviFone is an Android app with a bottom navigation bar of three destinations:
 
 - **Listen** plays the phone microphone live into headphones with minimal latency and jitter. It has a volume slider and an optional zero-latency ambient-sound reducer.
-- **Conversation** transcribes the microphone **on the device** (sherpa-onnx), shows up to 4 speakers in different colors, and keeps a summary of the last 15 minutes. The summary card has a **Local AI / Cloud AI** switch: Local uses Gemini Nano (ML Kit) where the phone has it, otherwise a Qwen3 0.6B model that the app downloads once and runs with LiteRT-LM; Cloud sends transcript text to Gemini after Google sign-in. Audio never leaves the phone in either mode.
+- **Transcribe** (Conversation) transcribes the microphone **on the device** (sherpa-onnx), shows up to 4 speakers in different colors, and keeps a summary of the last 15 minutes. The summary card has a **Local AI / Cloud AI** switch: Local uses Gemini Nano (ML Kit) where the phone has it, otherwise a Qwen3 0.6B model that the app downloads once and runs with LiteRT-LM; Cloud sends transcript text to Gemini after Google sign-in. Audio never leaves the phone in either mode.
 
-Both keep running with the screen off. The audio path is native C++ (Oboe); the UI, session logic and Gemini calls are Kotlin/Compose.
+- **Settings** holds the Google account (sign-out) and the Local AI model file (delete or download).
+
+Both features keep running with the screen off. The audio path is native C++ (Oboe); the UI, session logic and Gemini calls are Kotlin/Compose.
 
 Branches: `main` has Listen only. `AI-Addition` has the Conversation tab with Gemini doing transcription and speaker separation from audio. `Local-S2T` (this design) does both on the device.
 
@@ -73,7 +75,7 @@ The audio pipeline crosses three layers, and each layer has one owner:
   - **`LiteRtLmSummarizer`** uses CPU on x86_64 and tries GPU then CPU on arm64; one `Conversation` per summary, thinking disabled. **`NanoSummarizer`** uses the Prompt API with the same prompt.
   - The download runs in the controller's scope with no extra foreground service: it survives rotation, and if the process dies the part file resumes on the next tap.
 - **`GeminiSummarizer`** is the only cloud call. It sends transcript text to Firebase AI Logic (`gemini-3.5-flash`, JSON schema, low thinking), and only when the user is signed in. In Kotlin, the SDK builders are `text()`/`inlineData()` and `Schema.string()`/`Schema.double()`; their JVM names (`addText`, `str`, `numDouble`) don't compile from Kotlin. Firebase AI Logic requires App Check: `AviFoneApp` installs the debug provider, and each install's token must be registered in the console.
-- **`MainActivity`** and **`ui/`**: `AppScaffold` holds the Listen/Conversation tabs and renders both controllers' state. The activity being stopped or destroyed does **not** stop either feature.
+- **`MainActivity`** and **`ui/`**: `AppScaffold` is a Material 3 `Scaffold` with a bottom `NavigationBar` for Listen, Transcribe and Settings; a badge dot marks a feature that is running while another destination is shown. `SettingsScreen` holds Google sign-out and the Local AI model (delete, or download) so the summary card only carries the Local/Cloud choice, sign-in and download progress. The activity being stopped or destroyed does **not** stop either feature.
 
 Couplings to keep in sync:
 

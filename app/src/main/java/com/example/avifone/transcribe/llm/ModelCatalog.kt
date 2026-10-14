@@ -13,7 +13,8 @@ data class LlmModel(
     val contextTokens: Int,
     val license: String,
 ) {
-    val sizeMb: Int get() = (sizeBytes / 1_048_576.0).toInt()
+    /** Decimal megabytes, as download pages quote them. */
+    val sizeMb: Int get() = Math.round(sizeBytes / 1_000_000.0).toInt()
 }
 
 /**

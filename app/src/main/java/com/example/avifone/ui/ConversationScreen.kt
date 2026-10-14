@@ -115,11 +115,9 @@ fun ConversationScreen(controller: TranscriptionController) {
             SummaryCard(
                 state = state,
                 onSignIn = { activity?.let(controller::signIn) },
-                onSignOut = controller::signOut,
                 onMode = controller::setSummaryMode,
                 onDownload = controller::downloadLocalModel,
                 onCancelDownload = controller::cancelDownload,
-                onDeleteModel = controller::deleteLocalModel,
             )
         }
         if (state.speakers.isNotEmpty()) {
@@ -207,11 +205,9 @@ private fun StatusRow(state: ConversationUiState) {
 private fun SummaryCard(
     state: ConversationUiState,
     onSignIn: () -> Unit,
-    onSignOut: () -> Unit,
     onMode: (SummaryMode) -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
-    onDeleteModel: () -> Unit,
 ) {
     val summary = state.summary
     var expanded by rememberSaveable { mutableStateOf(true) }
@@ -236,11 +232,11 @@ private fun SummaryCard(
             SummaryModeSelector(state.summaryMode, onMode)
             val usable = when (state.summaryMode) {
                 SummaryMode.CLOUD -> {
-                    CloudSection(state, onSignIn, onSignOut)
+                    CloudSection(state, onSignIn)
                     state.firebaseConfigured && state.user != null
                 }
                 SummaryMode.LOCAL -> {
-                    LocalSection(state, onDownload, onCancelDownload, onDeleteModel)
+                    LocalSection(state, onDownload, onCancelDownload)
                     state.localModel == LocalModelState.Ready
                 }
             }
@@ -297,7 +293,7 @@ private fun SummaryModeSelector(mode: SummaryMode, onMode: (SummaryMode) -> Unit
 
 /** Gemini through Firebase: needs the project config and a signed-in Google account. */
 @Composable
-private fun CloudSection(state: ConversationUiState, onSignIn: () -> Unit, onSignOut: () -> Unit) {
+private fun CloudSection(state: ConversationUiState, onSignIn: () -> Unit) {
     if (!state.firebaseConfigured) {
         Text(
             "The cloud summary needs Firebase: add app/google-services.json and rebuild (see " +
@@ -319,15 +315,11 @@ private fun CloudSection(state: ConversationUiState, onSignIn: () -> Unit, onSig
         }
         return
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "Signed in as ${user.email ?: user.name ?: "Google user"}",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(onClick = onSignOut) { Text("Sign out") }
-    }
+    Text(
+        "Signed in as ${user.email ?: user.name ?: "Google user"} · manage in Settings",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** A model on this phone: Gemini Nano where Android provides it, else a one-time download. */
@@ -336,7 +328,6 @@ private fun LocalSection(
     state: ConversationUiState,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
-    onDeleteModel: () -> Unit,
 ) {
     val nano = state.localEngine == LocalEngine.NANO
     val name = state.localModelName
@@ -391,15 +382,11 @@ private fun LocalSection(
             Text("Download failed: ${model.reason}", color = MaterialTheme.colorScheme.error)
             Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) { Text("Retry") }
         }
-        LocalModelState.Ready -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (nano) "Using Gemini Nano on this device" else "$name · on this device",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            if (!nano) TextButton(onClick = onDeleteModel) { Text("Delete model") }
-        }
+        LocalModelState.Ready -> Text(
+            if (nano) "Using Gemini Nano on this device" else "$name · on this device · manage in Settings",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -4,7 +4,8 @@ An Android app that plays the phone's microphone live into your headphones with 
 delay and minimal jitter. It has a volume slider and an optional ambient-sound reducer, and
 keeps working with the screen off. A second tab transcribes the conversation around you on
 the phone itself, shows who said what in a different color for each of up to 4 speakers, and
-(with Google sign-in) keeps a Gemini summary of the last 15 minutes.
+keeps a running summary of the last 15 minutes, written either on the phone or by Gemini. A bottom navigation
+bar switches between Listen, Transcribe and Settings.
 
 ## Features
 
@@ -27,7 +28,7 @@ the phone itself, shows who said what in a different color for each of up to 4 s
   stops automatically if they're unplugged, so the mic never plays through the loudspeaker.
 - **Live stats.** Latency, sample rate, buffer size, whether MMAP is in use, and glitch counts.
 
-### Conversation tab
+### Transcribe tab
 
 - Tap **Start transcribing**. Speech is turned into text **on the phone** with small open
   models, so it works offline and audio never leaves the device. It works with or without
@@ -40,10 +41,10 @@ the phone itself, shows who said what in a different color for each of up to 4 s
   minute. Pick **Local AI** or **Cloud AI** on the summary card:
   - *Local AI* writes it on the phone. Phones with Gemini Nano (Pixel 9 and newer, Galaxy
     S25 and newer, and others) use it through Android's AICore; every other phone downloads
-    a small open model once (Qwen3 0.6B, 345 MB, kept in app storage and deletable from
-    the card). Nothing is sent anywhere.
+    a small open model once (Qwen3 0.6B, 345 MB, kept in app storage and deletable in
+    Settings). Nothing is sent anywhere.
   - *Cloud AI* sends the transcript *text* to Gemini after you sign in with Google. Sign-in
-    is needed only for this option.
+    is needed only for this option; sign out from Settings.
 - The transcript is kept only in memory, and only for 15 minutes. Transcription keeps going
   with the screen off.
 - Before the first start, a notice asks you to make sure everyone being recorded agrees.
@@ -92,7 +93,7 @@ Then build and install:
 Toolchain: AGP 9.4, Gradle 9.8, Kotlin 2.4, Jetpack Compose, NDK 30, CMake 4.1, Oboe 1.11,
 Firebase BoM 35, compileSdk 37.
 
-### Firebase setup (needed for the Conversation tab)
+### Firebase setup (needed for Cloud AI summaries)
 
 Transcription and the Local AI summary work without Firebase; only Cloud AI needs it. The first build also
 needs internet, to download the speech models. To enable the summary:
@@ -121,5 +122,5 @@ Configure your own release keystore before publishing.
 | `app/src/main/java/.../transcribe/local/` | On-device speech-to-text and speaker clustering (sherpa-onnx) |
 | `app/src/main/java/.../transcribe/` | Conversation session, transcript, speaker names, summary prompt and parsing, Gemini summary, sign-in |
 | `app/src/main/java/.../transcribe/llm/` | Local AI summary: model download with resume, LiteRT-LM and Gemini Nano summarizers |
-| `app/src/main/java/.../ui/` | Compose UI (Listen and Conversation tabs) |
+| `app/src/main/java/.../ui/` | Compose UI: bottom navigation bar, Listen, Transcribe and Settings screens |
 | `setup-android-dev.sh` | Installs the Android development environment |

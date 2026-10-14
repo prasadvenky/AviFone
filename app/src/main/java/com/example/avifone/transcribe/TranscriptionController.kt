@@ -158,6 +158,9 @@ class TranscriptionController private constructor(private val context: Context) 
         scope.launch { summarizeIfChanged() }
     }
 
+    /** Probes which on-device engine this phone has, for the Settings screen. */
+    fun checkLocalModel() = localModels.probe()
+
     fun downloadLocalModel() = localModels.download()
 
     fun cancelDownload() = localModels.cancel()

@@ -172,6 +172,7 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.oboe)
     implementation(files(fetchSpeechModels.flatMap { it.aarFile }))
     // On-device summary: LiteRT-LM runs a small LLM downloaded on first use; ML Kit gives
