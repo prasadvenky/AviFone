@@ -21,6 +21,9 @@ inline float softLimit(float x) {
     return std::copysign(limited, x);
 }
 
+constexpr int32_t kCaptureSampleRate = 48000;
+constexpr int32_t kCaptureFifoSeconds = 10;
+
 const oboe::InputPreset kPresetsToTry[] = {
         oboe::InputPreset::VoicePerformance,
         oboe::InputPreset::Unprocessed,
@@ -28,44 +31,116 @@ const oboe::InputPreset kPresetsToTry[] = {
 };
 }  // namespace
 
-oboe::Result LiveEngine::startEngine() {
+oboe::Result LiveEngine::setModes(bool listen, bool capture) {
     std::lock_guard<std::mutex> lock(mLock);
-    if (mRunning) return oboe::Result::OK;
-    mDisconnected = false;
-    closeStreams();  // leftovers from a stream that died with an error
+    const Mode wanted = listen ? Mode::Duplex : (capture ? Mode::InputOnly : Mode::Off);
+    if (capture) ensureCaptureFifo();
+    mCaptureEnabled = capture;
 
-    oboe::Result result = openStreams();
+    // Same layout and still alive: nothing to reopen (capture toggles on the fly).
+    if (wanted == mMode && (wanted == Mode::Off || mRunning)) return oboe::Result::OK;
+
+    stopAll();
+    if (wanted == Mode::Off) return oboe::Result::OK;
+    mDisconnected = false;
+
+    oboe::Result result = wanted == Mode::Duplex ? startDuplex() : startInputOnly();
     if (result != oboe::Result::OK) {
+        LOGW("start failed: %s", oboe::convertToText(result));
         closeStreams();
         return result;
     }
+    mMode = wanted;
+    mRunning = true;
+    return oboe::Result::OK;
+}
+
+oboe::Result LiveEngine::startDuplex() {
+    oboe::Result result = openDuplexStreams();
+    if (result != oboe::Result::OK) return result;
 
     mReducer.prepare(static_cast<float>(mOutput->getSampleRate()));
     mSmoothing = 1.0f - std::exp(-1.0f / (0.020f * mOutput->getSampleRate()));  // 20 ms
     mGain = 0;  // fade in from silence
     mWetMix = mNoiseReductionEnabled ? 1.0f : 0.0f;
     mInputUnderflows = 0;
-
-    result = FullDuplexStream::start();
-    if (result != oboe::Result::OK) {
-        LOGW("start failed: %s", oboe::convertToText(result));
-        closeStreams();
-        return result;
-    }
-    mRunning = true;
-    return oboe::Result::OK;
+    mCaptureSampleRate = mInput->getSampleRate();
+    return FullDuplexStream::start();
 }
 
-void LiveEngine::stopEngine() {
-    std::lock_guard<std::mutex> lock(mLock);
-    if (mInput || mOutput) {
+oboe::Result LiveEngine::startInputOnly() {
+    // Latency doesn't matter for transcription, so use the shared, power-saving
+    // path and the preset tuned for speech recognition.
+    oboe::AudioStreamBuilder builder;
+    builder.setDirection(oboe::Direction::Input)
+            ->setPerformanceMode(oboe::PerformanceMode::None)
+            ->setSharingMode(oboe::SharingMode::Shared)
+            ->setFormat(oboe::AudioFormat::Float)
+            ->setFormatConversionAllowed(true)
+            ->setChannelCount(oboe::ChannelCount::Mono)
+            ->setChannelConversionAllowed(true)
+            ->setSampleRate(kCaptureSampleRate)
+            ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
+            ->setInputPreset(oboe::InputPreset::VoiceRecognition)
+            ->setDataCallback(&mCaptureCallback)
+            ->setErrorCallback(this);
+    oboe::Result result = builder.openStream(mInput);
+    if (result != oboe::Result::OK) return result;
+    mInputPreset = oboe::InputPreset::VoiceRecognition;
+    mCaptureSampleRate = mInput->getSampleRate();
+    LOGI("opened input-only: %d Hz, mmap=%d", mInput->getSampleRate(),
+         oboe::OboeExtensions::isMMapUsed(mInput.get()));
+    return mInput->requestStart();
+}
+
+void LiveEngine::stopAll() {
+    if (mMode == Mode::Duplex && (mInput || mOutput)) {
         FullDuplexStream::stop();
+    } else if (mInput) {
+        mInput->requestStop();
     }
     closeStreams();
+    mMode = Mode::Off;
     mRunning = false;
 }
 
-oboe::Result LiveEngine::openStreams() {
+void LiveEngine::ensureCaptureFifo() {
+    if (mCaptureFifo.load(std::memory_order_acquire)) return;
+    // Sized for the worst case of a device running at 48 kHz.
+    mCaptureFifo.store(new oboe::FifoBuffer(sizeof(float), kCaptureSampleRate * kCaptureFifoSeconds),
+                       std::memory_order_release);
+}
+
+void LiveEngine::writeCapture(const float *samples, int32_t numFrames) {
+    if (numFrames <= 0 || !mCaptureEnabled.load(std::memory_order_relaxed)) return;
+    oboe::FifoBuffer *fifo = mCaptureFifo.load(std::memory_order_acquire);
+    if (!fifo) return;
+    const int32_t written = fifo->write(samples, numFrames);
+    if (written < numFrames) {
+        mCaptureDropped.fetch_add(numFrames - written, std::memory_order_relaxed);
+    }
+}
+
+int32_t LiveEngine::readCapture(float *dest, int32_t maxFrames) {
+    oboe::FifoBuffer *fifo = mCaptureFifo.load(std::memory_order_acquire);
+    if (!fifo || maxFrames <= 0) return 0;
+    return std::max(fifo->read(dest, maxFrames), 0);
+}
+
+oboe::DataCallbackResult LiveEngine::CaptureCallback::onAudioReady(oboe::AudioStream * /*stream*/,
+                                                                   void *audioData,
+                                                                   int32_t numFrames) {
+    const auto *in = static_cast<const float *>(audioData);
+    mEngine.writeCapture(in, numFrames);
+    float peak = 0;
+    for (int32_t i = 0; i < numFrames; ++i) peak = std::max(peak, std::fabs(in[i]));
+    if (peak > mEngine.mInputPeak.load(std::memory_order_relaxed)) {
+        mEngine.mInputPeak.store(peak, std::memory_order_relaxed);
+    }
+    return oboe::DataCallbackResult::Continue;
+}
+
+oboe::Result LiveEngine::openDuplexStreams() {
     // Output first: its native sample rate and burst size set the clock for both.
     oboe::AudioStreamBuilder outBuilder;
     outBuilder.setDirection(oboe::Direction::Output)
@@ -159,6 +234,7 @@ oboe::DataCallbackResult LiveEngine::onBothStreamsReady(const void *inputData, i
     if (numInputFrames < numOutputFrames) {
         mInputUnderflows.fetch_add(1, std::memory_order_relaxed);
     }
+    if (mInputChannels == 1) writeCapture(in, numInputFrames);
 
     float peak = 0;
     for (int i = 0; i < numOutputFrames; ++i) {
@@ -199,7 +275,13 @@ LiveEngine::Stats LiveEngine::stats() {
     s.inputLevelDb = 20.0f * std::log10(std::max(peak, 1e-5f));
     s.reductionDb = mReductionDb.load(std::memory_order_relaxed);
     s.inputUnderflows = static_cast<float>(mInputUnderflows.load(std::memory_order_relaxed));
-    if (!mRunning || !mOutput || !mInput) return s;
+    s.captureDropped = static_cast<float>(mCaptureDropped.load(std::memory_order_relaxed));
+    if (!mRunning || !mInput) return s;
+    if (!mOutput) {  // InputOnly: there is no playback path to report on.
+        s.sampleRate = static_cast<float>(mInput->getSampleRate());
+        s.inputPreset = static_cast<float>(mInputPreset);
+        return s;
+    }
 
     s.sampleRate = static_cast<float>(mOutput->getSampleRate());
     s.framesPerBurst = static_cast<float>(mOutput->getFramesPerBurst());

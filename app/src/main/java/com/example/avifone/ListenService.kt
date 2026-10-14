@@ -20,7 +20,8 @@ import androidx.core.content.ContextCompat
  * Microphone foreground service. It does no audio work itself (the native engine
  * runs on its own real-time threads); it keeps the process foreground so Android
  * doesn't silence the mic with the screen off, holds a partial wake lock so the
- * CPU stays up, and shows the ongoing notification with a Stop action.
+ * CPU stays up, and shows the ongoing notification with a Stop action. It runs while
+ * headphone listening, transcription, or both are on.
  */
 class ListenService : Service() {
 
@@ -30,15 +31,17 @@ class ListenService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            ListenController.get(this).stop()
+            ListenController.get(this).stopAll()
             return START_NOT_STICKY
         }
+        val listening = intent?.getBooleanExtra(EXTRA_LISTENING, false) ?: false
+        val transcribing = intent?.getBooleanExtra(EXTRA_TRANSCRIBING, false) ?: false
         val headphones = intent?.getStringExtra(EXTRA_HEADPHONES) ?: "headphones"
         try {
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
-                buildNotification(headphones),
+                buildNotification(listening, transcribing, headphones),
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 } else {
@@ -48,7 +51,7 @@ class ListenService : Service() {
         } catch (e: Exception) {
             // E.g. ForegroundServiceStartNotAllowedException if started from the background.
             Log.w(TAG, "Could not enter foreground", e)
-            ListenController.get(this).stop("Couldn't keep listening in the background")
+            ListenController.get(this).stopAll()
             return START_NOT_STICKY
         }
         acquireWakeLock()
@@ -73,7 +76,7 @@ class ListenService : Service() {
             }
     }
 
-    private fun buildNotification(headphones: String): Notification {
+    private fun buildNotification(listening: Boolean, transcribing: Boolean, headphones: String): Notification {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
@@ -96,8 +99,19 @@ class ListenService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.notification_title))
-            .setContentText(getString(R.string.notification_text, headphones))
+            .setContentTitle(
+                getString(
+                    when {
+                        listening && transcribing -> R.string.notification_title_both
+                        transcribing -> R.string.notification_title_transcribing
+                        else -> R.string.notification_title
+                    }
+                )
+            )
+            .setContentText(
+                if (listening) getString(R.string.notification_text, headphones)
+                else getString(R.string.notification_text_transcribing)
+            )
             .setContentIntent(openApp)
             .addAction(0, getString(R.string.notification_stop), stop)
             .setOngoing(true)
@@ -113,12 +127,18 @@ class ListenService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.example.avifone.STOP"
         private const val EXTRA_HEADPHONES = "headphones"
+        private const val EXTRA_LISTENING = "listening"
+        private const val EXTRA_TRANSCRIBING = "transcribing"
         private const val WAKE_LOCK_TIMEOUT_MS = 12 * 60 * 60 * 1000L
 
-        fun start(context: Context, headphones: String) {
+        /** Starts the service, or refreshes its notification if it's already running. */
+        fun start(context: Context, listening: Boolean, transcribing: Boolean, headphones: String?) {
             ContextCompat.startForegroundService(
                 context,
-                Intent(context, ListenService::class.java).putExtra(EXTRA_HEADPHONES, headphones),
+                Intent(context, ListenService::class.java)
+                    .putExtra(EXTRA_LISTENING, listening)
+                    .putExtra(EXTRA_TRANSCRIBING, transcribing)
+                    .putExtra(EXTRA_HEADPHONES, headphones),
             )
         }
 

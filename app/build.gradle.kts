@@ -3,6 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Firebase config is per-developer and not committed (see README). Without it the app
+// still builds; the Conversation tab then explains that Firebase isn't set up.
+if (file("google-services.json").exists()) {
+    apply(plugin = libs.plugins.google.services.get().pluginId)
+}
+
 android {
     namespace = "com.example.avifone"
     compileSdk = 37
@@ -64,5 +70,18 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.oboe)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.ai)
+    implementation(libs.firebase.auth)
+    // App Check is mandatory for Firebase AI Logic. Side-loaded builds use the debug
+    // provider with per-install tokens registered in the console (see AviFoneApp).
+    implementation(libs.firebase.appcheck.debug)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
+    implementation(libs.kotlinx.coroutines.play.services)
+    testImplementation(libs.junit)
+    // Android's org.json is a stub in local unit tests; use the real library there.
+    testImplementation(libs.org.json)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

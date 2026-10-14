@@ -54,74 +54,57 @@ fun MonitorScreen(controller: ListenController) {
     }
 
     val onToggle = {
-        val hasMic = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
         when {
             state.running -> controller.stop()
-            hasMic && hasNotifications(context) -> controller.start()
+            hasMicrophone(context) && hasNotifications(context) -> controller.start()
             else -> permissionLauncher.launch(requiredPermissions())
         }
     }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(
-            modifier = Modifier
-                .safeDrawingPadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        HeadphoneCard(state)
+
+        Button(
+            onClick = onToggle,
+            enabled = state.running || state.headphones != null,
+            modifier = Modifier.fillMaxWidth().height(64.dp),
+            colors = if (state.running) {
+                ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                )
+            } else {
+                ButtonDefaults.buttonColors()
+            },
         ) {
-            Text("AviFone", style = MaterialTheme.typography.headlineMedium)
-            HeadphoneCard(state)
-
-            Button(
-                onClick = onToggle,
-                enabled = state.running || state.headphones != null,
-                modifier = Modifier.fillMaxWidth().height(64.dp),
-                colors = if (state.running) {
-                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                } else {
-                    ButtonDefaults.buttonColors()
-                },
-            ) {
-                Text(
-                    if (state.running) "Stop listening" else "Start listening",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
-
-            if (state.running) {
-                Text(
-                    "Keeps listening with the screen off. Stop it here or from the notification.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            state.message?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
-
-            VolumeCard(state, controller::setVolume)
-            NoiseReductionCard(state, controller::setNoiseReduction, controller::setNoiseReductionStrength)
-            if (state.running) state.stats?.let { StatsCard(it) }
+            Text(
+                if (state.running) "Stop listening" else "Start listening",
+                style = MaterialTheme.typography.titleMedium,
+            )
         }
+
+        if (state.running) {
+            Text(
+                "Keeps listening with the screen off. Stop it here or from the notification.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        state.message?.let {
+            Text(it, color = MaterialTheme.colorScheme.error)
+        }
+
+        VolumeCard(state, controller::setVolume)
+        NoiseReductionCard(state, controller::setNoiseReduction, controller::setNoiseReductionStrength)
+        if (state.running) state.stats?.let { StatsCard(it) }
     }
 }
-
-private fun requiredPermissions(): Array<String> =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
-    } else {
-        arrayOf(Manifest.permission.RECORD_AUDIO)
-    }
-
-/** If this was denied, the launcher still calls back with the mic result, so Start isn't blocked. */
-private fun hasNotifications(context: android.content.Context): Boolean =
-    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-        ContextCompat.checkSelfPermission(
-            context, Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
 
 @Composable
 private fun HeadphoneCard(state: MonitorUiState) {

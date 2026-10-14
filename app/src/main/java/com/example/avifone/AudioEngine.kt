@@ -1,6 +1,10 @@
 package com.example.avifone
 
-/** Thin wrapper around the native Oboe pass-through engine (see src/main/cpp). */
+/**
+ * Thin wrapper around the native Oboe engine (see src/main/cpp). The engine owns the
+ * microphone; headphone pass-through ("listen") and raw-sample capture for
+ * transcription ("capture") are independent features of the same input stream.
+ */
 object AudioEngine {
     init {
         System.loadLibrary("avifone")
@@ -20,6 +24,8 @@ object AudioEngine {
         val mmapInput: Boolean,
         val mmapOutput: Boolean,
         val inputPreset: Int,
+        /** Captured samples dropped because the transcription reader fell behind. */
+        val captureDropped: Int,
     ) {
         companion object {
             fun fromArray(a: FloatArray) = Stats(
@@ -34,13 +40,19 @@ object AudioEngine {
                 mmapInput = a[8] > 0f,
                 mmapOutput = a[9] > 0f,
                 inputPreset = a[10].toInt(),
+                captureDropped = a[11].toInt(),
             )
         }
     }
 
-    /** Returns 0 on success, otherwise a negative oboe::Result code. */
-    fun start(): Int = nativeStart()
-    fun stop() = nativeStop()
+    /**
+     * Opens, reconfigures or closes the streams so exactly these features run.
+     * Returns 0 on success, otherwise a negative oboe::Result code.
+     */
+    fun setModes(listen: Boolean, capture: Boolean): Int = nativeSetModes(listen, capture)
+    /** Copies captured mono samples into [dest]; returns how many. Never blocks. */
+    fun readCapture(dest: FloatArray): Int = nativeReadCapture(dest)
+    val captureSampleRate: Int get() = nativeCaptureSampleRate()
     val isRunning: Boolean get() = nativeIsRunning()
     fun setVolume(linearGain: Float) = nativeSetVolume(linearGain)
     fun setNoiseReduction(enabled: Boolean, strength: Float) =
@@ -49,8 +61,9 @@ object AudioEngine {
     /** True once after the audio route was lost (e.g. headphones unplugged). */
     fun consumeDisconnected(): Boolean = nativeConsumeDisconnected()
 
-    private external fun nativeStart(): Int
-    private external fun nativeStop()
+    private external fun nativeSetModes(listen: Boolean, capture: Boolean): Int
+    private external fun nativeReadCapture(dest: FloatArray): Int
+    private external fun nativeCaptureSampleRate(): Int
     private external fun nativeIsRunning(): Boolean
     private external fun nativeSetVolume(gain: Float)
     private external fun nativeSetNoiseReduction(enabled: Boolean, strength: Float)

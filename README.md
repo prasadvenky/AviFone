@@ -2,7 +2,9 @@
 
 An Android app that plays the phone's microphone live into your headphones with very low
 delay and minimal jitter. It has a volume slider and an optional ambient-sound reducer, and
-keeps working with the screen off.
+keeps working with the screen off. A second tab transcribes the conversation around you with
+Google Gemini, shows who said what in a different color for each of up to 4 speakers, and
+keeps a running summary of the last 15 minutes.
 
 ## Features
 
@@ -25,13 +27,31 @@ keeps working with the screen off.
   stops automatically if they're unplugged, so the mic never plays through the loudspeaker.
 - **Live stats.** Latency, sample rate, buffer size, whether MMAP is in use, and glitch counts.
 
+### Conversation tab
+
+- **Sign in with Google**, then tap **Start transcribing**. This works with or without
+  headphone listening. When both are on, they share the same microphone stream.
+- Audio is sent to **Gemini** (`gemini-3.5-flash` through Firebase AI Logic) in 30-second
+  chunks, so the transcript trails speech by about 30–40 s. Silent chunks are skipped.
+- **Up to 4 speakers**, each with their own color. Gemini numbers speakers separately in each
+  request, so every request starts with a short reference clip of each known speaker's voice,
+  and Gemini matches new speech against those. Tap a speaker to rename them, or to merge them
+  into another speaker if one person was split in two.
+- **"Last 15 minutes" summary**: the topic, key points and action items, refreshed every
+  minute. The transcript is kept only in memory and only for 15 minutes.
+- Keeps transcribing with the screen off, through the same foreground service as listening.
+- Before the first start, a notice asks you to make sure everyone being recorded agrees.
+  It's meant for personal, non-sensitive conversations: on Gemini's free tier, Google may use
+  what's sent to improve its products.
+
 Wired or USB-C headphones give the lowest latency (typically about 10–30 ms). Bluetooth adds
 100–300 ms that no app can remove.
 
 ## Requirements
 
 - Android 8.0 (API 26) or newer, arm64 or x86_64
-- Headphones
+- Headphones, for the Listen tab
+- Internet and a Google account, for the Conversation tab
 
 ## Building
 
@@ -46,10 +66,24 @@ Then build and install:
 ```bash
 ./gradlew assembleRelease          # app/build/outputs/apk/release/app-release.apk
 ./gradlew installDebug             # install on a connected phone
+./gradlew testDebugUnitTest        # JVM unit tests (transcription pipeline)
 ```
 
 Toolchain: AGP 9.4, Gradle 9.8, Kotlin 2.4, Jetpack Compose, NDK 30, CMake 4.1, Oboe 1.11,
-compileSdk 37.
+Firebase BoM 35, compileSdk 37.
+
+### Firebase setup (needed for the Conversation tab)
+
+The app builds without Firebase, but the Conversation tab then just says that Firebase isn't
+set up. To enable it:
+
+1. In the [Firebase console](https://console.firebase.google.com), create a project and add
+   an Android app with package name `com.example.avifone`.
+2. Add the SHA-1 fingerprint of the key that signs your builds:
+   `keytool -list -v -keystore ~/.android/debug.keystore -storepass android`
+3. **Authentication → Sign-in method**: enable **Google**.
+4. **AI Logic**: enable it with the **Gemini Developer API**.
+5. Download `google-services.json` into `app/`, then rebuild. The file is git-ignored.
 
 The release build is currently signed with the local debug key so it can be side-loaded.
 Configure your own release keystore before publishing.
@@ -64,5 +98,6 @@ Configure your own release keystore before publishing.
 | `app/src/main/java/.../AudioEngine.kt` | Kotlin wrapper around the native engine |
 | `app/src/main/java/.../ListenController.kt` | App-wide session state: headphone detection, route changes, settings |
 | `app/src/main/java/.../ListenService.kt` | Microphone foreground service, wake lock and notification |
-| `app/src/main/java/.../ui/` | Compose UI |
+| `app/src/main/java/.../transcribe/` | Conversation pipeline: resampling, chunking, Gemini requests, speaker tracking, summary, sign-in |
+| `app/src/main/java/.../ui/` | Compose UI (Listen and Conversation tabs) |
 | `setup-android-dev.sh` | Installs the Android development environment |

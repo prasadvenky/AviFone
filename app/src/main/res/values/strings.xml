@@ -3,5 +3,8 @@
     <string name="notification_channel">Listening</string>
     <string name="notification_title">Listening</string>
     <string name="notification_text">Microphone → %1$s</string>
+    <string name="notification_title_transcribing">Transcribing</string>
+    <string name="notification_title_both">Listening and transcribing</string>
+    <string name="notification_text_transcribing">Microphone → Gemini transcription</string>
     <string name="notification_stop">Stop</string>
 </resources>

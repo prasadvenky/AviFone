@@ -10,3 +10,6 @@
 .externalNativeBuild/
 .kotlin/
 /dist/
+
+# Per-developer Firebase config (see README)
+/app/google-services.json
