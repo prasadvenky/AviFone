@@ -202,6 +202,13 @@ private fun StatusRow(state: ConversationUiState) {
                 color = MaterialTheme.colorScheme.error,
             )
             MicLevelMeter(state.micLevel)
+            if (state.audioDropped) {
+                Text(
+                    "Some audio was dropped: this phone couldn't keep up with the speech model.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (state.micSilent) {
                 Text(
                     "No sound is reaching the microphone." + if (isEmulator()) {

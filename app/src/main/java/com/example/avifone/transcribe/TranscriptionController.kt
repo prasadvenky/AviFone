@@ -19,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +47,8 @@ data class ConversationUiState(
     val micLevel: Float = 0f,
     /** The microphone has delivered nothing but silence for several seconds. */
     val micSilent: Boolean = false,
+    /** The native capture buffer overflowed during this session, so some audio was never heard. */
+    val audioDropped: Boolean = false,
     val lines: List<TranscriptLine> = emptyList(),
     /** Every label used in [lines] (including merged ones) -> who it is now. */
     val speakers: Map<String, SpeakerInfo> = emptyMap(),
@@ -232,7 +235,9 @@ class TranscriptionController private constructor(private val context: Context) 
         pump?.cancel()  // pump() flushes the last utterance in `finally`
         summaryJob?.cancel()
         summaryJob = null
-        _state.update { it.copy(transcribing = false, speechActive = false, micLevel = 0f, micSilent = false) }
+        _state.update {
+            it.copy(transcribing = false, speechActive = false, micLevel = 0f, micSilent = false, audioDropped = false)
+        }
         scope.launch {
             pump?.join()
             summarizeIfChanged()
@@ -255,7 +260,7 @@ class TranscriptionController private constructor(private val context: Context) 
         // The transcriber is reused across sessions, so its sample positions keep counting;
         // anchor this session's wall clock to the count at the start.
         val sessionStartMs = System.currentTimeMillis()
-        val sessionStartSample = withContext(speechThread) { engine.samplesAccepted }
+        val sessionStartSample = withContext(speechThread) { engine.startSession() }
         fun add(utterances: List<LocalUtterance>) {
             if (utterances.isEmpty()) return
             for (u in utterances) {
@@ -270,26 +275,35 @@ class TranscriptionController private constructor(private val context: Context) 
             publish()
         }
 
+        // Reading the microphone and decoding are decoupled: the reader never waits on a
+        // model, so a slow decode (large models, the emulator) can't overflow the native
+        // capture FIFO. The queue is unbounded; the decoder catches up between utterances.
+        val chunks = Channel<FloatArray>(Channel.UNLIMITED)
+        val decoder = scope.launch(speechThread) {
+            for (chunk in chunks) {
+                val done = engine.accept(chunk)
+                if (done.isNotEmpty()) withContext(Dispatchers.Main.immediate) { add(done) }
+            }
+        }
+
         val readBuffer = FloatArray(READ_BLOCK)
         var resampler: Resampler? = null
         var lastSoundMs = sessionStartMs
+        val droppedBefore = AudioEngine.stats().captureDropped
         try {
             while (true) {
                 var peak = 0f
-                val done = withContext(speechThread) {
-                    val out = mutableListOf<LocalUtterance>()
+                withContext(Dispatchers.Default) {
                     while (true) {
+                        val rate = AudioEngine.captureSampleRate
+                        if (rate <= 0) break  // stream not open yet: leave the samples in the FIFO
                         val count = AudioEngine.readCapture(readBuffer)
                         if (count <= 0) break
                         for (i in 0 until count) peak = maxOf(peak, abs(readBuffer[i]))
-                        val rate = AudioEngine.captureSampleRate
-                        if (rate <= 0) continue
                         if (resampler?.inputRate != rate) resampler = Resampler(rate, LocalTranscriber.SAMPLE_RATE)
-                        out += engine.accept(resampler!!.process(readBuffer, count))
+                        chunks.trySend(resampler!!.process(readBuffer, count))
                     }
-                    out
                 }
-                add(done)
                 val now = System.currentTimeMillis()
                 if (peak > SILENCE_PEAK) lastSoundMs = now
                 _state.update {
@@ -297,12 +311,17 @@ class TranscriptionController private constructor(private val context: Context) 
                         speechActive = engine.isSpeechDetected,
                         micLevel = peak,
                         micSilent = now - lastSoundMs > SILENT_AFTER_MS,
+                        audioDropped = AudioEngine.stats().captureDropped > droppedBefore,
                     )
                 }
                 delay(PUMP_INTERVAL_MS)
             }
         } finally {
-            withContext(NonCancellable) { add(withContext(speechThread) { engine.flush() }) }
+            chunks.close()
+            withContext(NonCancellable) {
+                decoder.join()  // everything read so far is decoded before the flush
+                add(withContext(speechThread) { engine.flush() })
+            }
         }
     }
 

@@ -87,6 +87,55 @@ class LocalTranscriberTest {
         assertTrue("recognized $recognized of ${turns.size} turns", recognized >= 14)
     }
 
+    /**
+     * Regression test for long turns. sherpa-onnx 1.13.8 decodes Moonshine v2 segments over
+     * ~9.2 s to empty text, so the VAD must split before that. Two consecutive turns with the
+     * pause between them removed form one ~12 s stretch of continuous speech.
+     */
+    @Test
+    fun longUtteranceIsNotLost() {
+        val audio = readWav16k("conversation4_16k.wav")
+        val turns = readTruth().take(2)
+        val speech = turns.flatMap { t ->
+            audio.copyOfRange((t.start * 16000).toInt(), (t.end * 16000).toInt()).asList()
+        }.toFloatArray()
+        assertTrue("test needs > 9.2 s of continuous speech", speech.size > 9.2 * 16000)
+
+        val utterances = mutableListOf<LocalUtterance>()
+        LocalTranscriber(instrumentation.targetContext.assets).use { t ->
+            var i = 0
+            while (i < speech.size) {
+                val block = speech.copyOfRange(i, minOf(i + 1600, speech.size))
+                utterances += t.accept(block)
+                i += block.size
+            }
+            utterances += t.flush()
+        }
+        utterances.forEach { Log.i(TAG, "%.1f-%.1f s: %s".format(it.startSample / 16000.0, it.endSample / 16000.0, it.text)) }
+
+        val hyp = utterances.flatMap { words(it.text) }.toSet()
+        val ref = turns.flatMap { words(it.text) }
+        val recall = ref.count { it in hyp }.toDouble() / ref.size
+        Log.i(TAG, "long utterance: %d pieces, word recall %.2f".format(utterances.size, recall))
+        assertTrue("word recall $recall", recall >= 0.6)
+    }
+
+    /** The same stretch handed to the recognizer as one segment must be split, not lost. */
+    @Test
+    fun recognizesSegmentsOverTheLimitInPieces() {
+        val audio = readWav16k("conversation4_16k.wav")
+        val turns = readTruth().take(2)
+        val speech = turns.flatMap { t ->
+            audio.copyOfRange((t.start * 16000).toInt(), (t.end * 16000).toInt()).asList()
+        }.toFloatArray()
+        val text = LocalTranscriber(instrumentation.targetContext.assets).use { it.recognizeText(speech) }
+        Log.i(TAG, "%.1f s segment: %s".format(speech.size / 16000.0, text))
+        val hyp = words(text).toSet()
+        val ref = turns.flatMap { words(it.text) }
+        val recall = ref.count { it in hyp }.toDouble() / ref.size
+        assertTrue("word recall $recall", recall >= 0.6)
+    }
+
     companion object {
         private const val TAG = "LocalTranscriberTest"
     }
