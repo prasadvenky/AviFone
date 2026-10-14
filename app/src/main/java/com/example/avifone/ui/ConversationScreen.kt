@@ -1,6 +1,7 @@
 package com.example.avifone.ui
 
 import android.Manifest
+import android.os.Build
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -68,6 +69,7 @@ import com.example.avifone.transcribe.TranscriptLine
 import com.example.avifone.transcribe.TranscriptionController
 import java.text.DateFormat
 import java.util.Date
+import kotlin.math.log10
 
 @Composable
 fun ConversationScreen(controller: TranscriptionController) {
@@ -193,13 +195,41 @@ private fun StatusRow(state: ConversationUiState) {
             CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
             Text("Loading speech models…", style = MaterialTheme.typography.bodySmall)
         }
-        state.transcribing -> Text(
-            if (state.speechActive) "● Listening · someone is speaking…" else "● Listening",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
+        state.transcribing -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                if (state.speechActive) "● Listening · someone is speaking…" else "● Listening",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            MicLevelMeter(state.micLevel)
+            if (state.micSilent) {
+                Text(
+                    "No sound is reaching the microphone." + if (isEmulator()) {
+                        " This emulator was started without audio; launch it with -allow-host-audio."
+                    } else {
+                        " Check that another app isn't using it and that it isn't muted."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
     }
 }
+
+/** Peak input level on a -60 dBFS..0 dBFS scale, so a live microphone visibly moves. */
+@Composable
+private fun MicLevelMeter(peak: Float) {
+    val db = if (peak > 0f) 20 * log10(peak) else -100f
+    val fraction = ((db + 60f) / 60f).coerceIn(0f, 1f)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Mic", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.weight(1f))
+    }
+}
+
+private fun isEmulator(): Boolean =
+    Build.HARDWARE.contains("ranchu") || Build.HARDWARE.contains("goldfish") || Build.FINGERPRINT.startsWith("generic")
 
 @Composable
 private fun SummaryCard(

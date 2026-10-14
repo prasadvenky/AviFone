@@ -27,6 +27,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 data class SpeakerInfo(val label: String, val name: String, val colorIndex: Int)
 
@@ -41,6 +42,10 @@ data class ConversationUiState(
     val loadingModels: Boolean = false,
     /** Someone is talking right now (voice activity detector). */
     val speechActive: Boolean = false,
+    /** Peak microphone level over the last pump interval, 0..1 linear. */
+    val micLevel: Float = 0f,
+    /** The microphone has delivered nothing but silence for several seconds. */
+    val micSilent: Boolean = false,
     val lines: List<TranscriptLine> = emptyList(),
     /** Every label used in [lines] (including merged ones) -> who it is now. */
     val speakers: Map<String, SpeakerInfo> = emptyMap(),
@@ -227,7 +232,7 @@ class TranscriptionController private constructor(private val context: Context) 
         pump?.cancel()  // pump() flushes the last utterance in `finally`
         summaryJob?.cancel()
         summaryJob = null
-        _state.update { it.copy(transcribing = false, speechActive = false) }
+        _state.update { it.copy(transcribing = false, speechActive = false, micLevel = 0f, micSilent = false) }
         scope.launch {
             pump?.join()
             summarizeIfChanged()
@@ -267,13 +272,16 @@ class TranscriptionController private constructor(private val context: Context) 
 
         val readBuffer = FloatArray(READ_BLOCK)
         var resampler: Resampler? = null
+        var lastSoundMs = sessionStartMs
         try {
             while (true) {
+                var peak = 0f
                 val done = withContext(speechThread) {
                     val out = mutableListOf<LocalUtterance>()
                     while (true) {
                         val count = AudioEngine.readCapture(readBuffer)
                         if (count <= 0) break
+                        for (i in 0 until count) peak = maxOf(peak, abs(readBuffer[i]))
                         val rate = AudioEngine.captureSampleRate
                         if (rate <= 0) continue
                         if (resampler?.inputRate != rate) resampler = Resampler(rate, LocalTranscriber.SAMPLE_RATE)
@@ -282,7 +290,15 @@ class TranscriptionController private constructor(private val context: Context) 
                     out
                 }
                 add(done)
-                _state.update { it.copy(speechActive = engine.isSpeechDetected) }
+                val now = System.currentTimeMillis()
+                if (peak > SILENCE_PEAK) lastSoundMs = now
+                _state.update {
+                    it.copy(
+                        speechActive = engine.isSpeechDetected,
+                        micLevel = peak,
+                        micSilent = now - lastSoundMs > SILENT_AFTER_MS,
+                    )
+                }
                 delay(PUMP_INTERVAL_MS)
             }
         } finally {
@@ -346,6 +362,9 @@ class TranscriptionController private constructor(private val context: Context) 
         private const val KEY_SUMMARY_MODE = "summary_mode"
         private const val READ_BLOCK = 4096
         private const val PUMP_INTERVAL_MS = 200L
+        /** -54 dBFS: below this the microphone is treated as delivering nothing. */
+        private const val SILENCE_PEAK = 0.002f
+        private const val SILENT_AFTER_MS = 5_000L
         private const val SUMMARY_INTERVAL_MS = 60_000L
         private const val SUMMARY_ERROR = "Summary: "
         /** transcriptVersion starts at 0 and only grows, so this forces the next summary. */
