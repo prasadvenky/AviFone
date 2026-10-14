@@ -1,7 +1,8 @@
 # Speech-to-text evaluation tools
 
-Two scripts measure the app's transcription pipeline outside the phone, so models and VAD
-settings can be compared in seconds rather than by listening.
+Three scripts run the app's transcription pipeline outside the phone, so models and VAD
+settings can be compared on the laptop: one scores labelled clips, one is a live window that
+listens to whatever the computer plays, and one builds an Indian-English test subset.
 
 ## Setup (once)
 
@@ -27,6 +28,35 @@ curl -L -o $D/desktop/whisper-small/tokens.txt       $W/small-tokens.txt
 ```
 
 Whisper turbo is the same with `turbo-` file names from `sherpa-onnx-whisper-turbo`.
+
+## `live_tester.py` — listen to YouTube (or anything) and compare models live
+
+```bash
+.venv/bin/python tools/live_tester.py
+```
+
+A window with one column per ticked model. "Listen to" defaults to the PulseAudio monitor of
+the default output, i.e. whatever the computer is playing: start a YouTube video (or a call, a
+podcast, a file in any player), press **Start**, and every utterance the VAD cuts appears in
+each column with its timestamp, decode time and real-time factor. The top of each column keeps
+the running averages and how long the last result arrived after the speech ended. Models can be
+ticked and unticked while it runs; a microphone can be chosen instead of the monitor; **Play
+file…** feeds a sound file through at real-time speed.
+
+To get a number, open the video's transcript on YouTube ("…more" → *Show transcript*), paste it
+into the reference box and press **Score WER**: each column header then shows its word error
+rate (same normalisation as `eval_asr.py`). **Save transcripts…** writes everything to a text
+file. The models are the ones staged under `.gradle/speech-models/desktop/`; Whisper
+large-v3-turbo appears greyed out until it is staged.
+
+Headless, for scripts: `--headless SECONDS` prints the same results to stdout, `--file` feeds a
+sound file (`--fast` without real-time pacing), `--source` picks a PulseAudio source
+(`pactl list short sources`), `--reference` scores against a text file. `--start` makes the
+window begin listening as soon as it opens.
+
+Laptop numbers (16 cores, 4 threads per model) are decode-time ratios of about 0.03 for
+Moonshine, 0.25 for Nemotron and 0.35 for Whisper small, so all three keep up with live speech
+together. They say nothing about phone speed; see `WerTest` for that.
 
 ## `eval_asr.py` — word error rate of the app's pipeline
 
