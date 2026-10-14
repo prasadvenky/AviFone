@@ -174,6 +174,10 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.oboe)
     implementation(files(fetchSpeechModels.flatMap { it.aarFile }))
+    // On-device summary: LiteRT-LM runs a small LLM downloaded on first use; ML Kit gives
+    // access to Gemini Nano on phones that have it.
+    implementation(libs.litertlm.android)
+    implementation(libs.mlkit.genai.prompt)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.ai)
     implementation(libs.firebase.auth)

@@ -36,9 +36,14 @@ the phone itself, shows who said what in a different color for each of up to 4 s
 - **Up to 4 speakers**, each with their own color, told apart on the phone by their voice.
   Tap a speaker to rename them, or to merge them into another speaker if one person was
   split in two.
-- **"Last 15 minutes" summary**: sign in with Google, and the transcript *text* is sent to
-  Gemini to write the topic, key points and action items, refreshed every minute. Sign-in
-  is needed only for the summary.
+- **"Last 15 minutes" summary** of the topic, key points and action items, refreshed every
+  minute. Pick **Local AI** or **Cloud AI** on the summary card:
+  - *Local AI* writes it on the phone. Phones with Gemini Nano (Pixel 9 and newer, Galaxy
+    S25 and newer, and others) use it through Android's AICore; every other phone downloads
+    a small open model once (Qwen3 0.6B, 345 MB, kept in app storage and deletable from
+    the card). Nothing is sent anywhere.
+  - *Cloud AI* sends the transcript *text* to Gemini after you sign in with Google. Sign-in
+    is needed only for this option.
 - The transcript is kept only in memory, and only for 15 minutes. Transcription keeps going
   with the screen off.
 - Before the first start, a notice asks you to make sure everyone being recorded agrees.
@@ -49,9 +54,13 @@ the phone itself, shows who said what in a different color for each of up to 4 s
 | [Silero VAD](https://github.com/snakers4/silero-vad): detects when someone is talking | 0.6 MB | MIT |
 | NVIDIA NeMo SpeakerNet: voice fingerprints for telling speakers apart | 23 MB | Apache-2.0 (NeMo) |
 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 1.13.8 runtime (with ONNX Runtime) | ~24 MB native | Apache-2.0 |
+| [Qwen3 0.6B](https://huggingface.co/litert-community/Qwen3-0.6B) (INT4, `.litertlm`): Local AI summary | 345 MB, downloaded on first use | Apache-2.0 |
+| [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) 0.18 runtime | ~20 MB native | Apache-2.0 |
+| Gemini Nano via [ML Kit GenAI](https://developers.google.com/ml-kit/genai) | provided by Android | Google APIs terms |
 
-The models are downloaded and checksum-verified at build time and bundled into the APK, so
-the release APK is about 107 MB. English only.
+The speech models are downloaded and checksum-verified at build time and bundled into the
+APK, so the release APK is about 130 MB. The Local AI summary model is downloaded by the
+app on first use (resumable, SHA-256 verified) into app storage. English only.
 
 Wired or USB-C headphones give the lowest latency (typically about 10–30 ms). Bluetooth adds
 100–300 ms that no app can remove.
@@ -60,7 +69,8 @@ Wired or USB-C headphones give the lowest latency (typically about 10–30 ms). 
 
 - Android 8.0 (API 26) or newer, arm64 or x86_64
 - Headphones, for the Listen tab
-- A Google account and internet, only for the Conversation tab's AI summary
+- Internet once, to download the Local AI summary model; a Google account and internet for
+  Cloud AI summaries
 
 ## Building
 
@@ -84,7 +94,7 @@ Firebase BoM 35, compileSdk 37.
 
 ### Firebase setup (needed for the Conversation tab)
 
-Transcription works without Firebase; only the AI summary needs it. The first build also
+Transcription and the Local AI summary work without Firebase; only Cloud AI needs it. The first build also
 needs internet, to download the speech models. To enable the summary:
 
 1. In the [Firebase console](https://console.firebase.google.com), create a project and add
@@ -109,6 +119,7 @@ Configure your own release keystore before publishing.
 | `app/src/main/java/.../ListenController.kt` | App-wide session state: headphone detection, route changes, settings |
 | `app/src/main/java/.../ListenService.kt` | Microphone foreground service, wake lock and notification |
 | `app/src/main/java/.../transcribe/local/` | On-device speech-to-text and speaker clustering (sherpa-onnx) |
-| `app/src/main/java/.../transcribe/` | Conversation session, transcript, speaker names, Gemini summary, sign-in |
+| `app/src/main/java/.../transcribe/` | Conversation session, transcript, speaker names, summary prompt and parsing, Gemini summary, sign-in |
+| `app/src/main/java/.../transcribe/llm/` | Local AI summary: model download with resume, LiteRT-LM and Gemini Nano summarizers |
 | `app/src/main/java/.../ui/` | Compose UI (Listen and Conversation tabs) |
 | `setup-android-dev.sh` | Installs the Android development environment |

@@ -7,20 +7,14 @@ import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.ThinkingLevel
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
-import org.json.JSONObject
-
-data class ConversationSummary(
-    val topic: String,
-    val points: List<String>,
-    val actionItems: List<String>,
-    val updatedAtMs: Long,
-)
 
 /**
  * The only cloud call in the conversation feature: summarizes transcript *text* with
  * Gemini through Firebase AI Logic. Audio never leaves the device.
  */
-class GeminiSummarizer {
+class GeminiSummarizer : Summarizer {
+
+    override val label = "Gemini (cloud)"
 
     private val model by lazy {
         Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
@@ -34,30 +28,10 @@ class GeminiSummarizer {
         )
     }
 
-    suspend fun summarize(transcript: String, nowMs: Long): ConversationSummary {
-        val prompt = """
-            Below is the transcript of the last (up to) 15 minutes of a conversation, one line
-            per utterance as "[time] speaker: text". It was produced by on-device speech
-            recognition, so expect some misheard words; infer the intended meaning.
-            Summarize it for someone who just joined.
-            - topic: one short line saying what the conversation is about.
-            - points: up to 6 concise key points, naming who said what where it matters.
-            - actionItems: decisions, open questions or to-dos; empty if there are none.
-            Write in the language of the conversation.
-
-            $transcript
-        """.trimIndent()
-        val json = JSONObject(model.generateContent(prompt).text?.trim().orEmpty().ifEmpty { "{}" })
-        return ConversationSummary(
-            topic = json.optString("topic"),
-            points = json.optJSONArray("points").strings(),
-            actionItems = json.optJSONArray("actionItems").strings(),
-            updatedAtMs = nowMs,
-        )
+    override suspend fun summarize(transcript: String, nowMs: Long): ConversationSummary {
+        val text = model.generateContent(SummaryPrompt.cloud(transcript)).text.orEmpty()
+        return SummaryJson.parse(text, nowMs)
     }
-
-    private fun org.json.JSONArray?.strings(): List<String> =
-        if (this == null) emptyList() else (0 until length()).map { getString(it) }.filter { it.isNotBlank() }
 
     companion object {
         /** Stable Flash model available through Firebase AI Logic. */

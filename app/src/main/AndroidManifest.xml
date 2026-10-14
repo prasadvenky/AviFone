@@ -33,5 +33,9 @@
             android:name=".ListenService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- OpenCL, used by LiteRT-LM's GPU backend where the phone has it. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
     </application>
 </manifest>

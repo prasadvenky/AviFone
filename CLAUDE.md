@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 AviFone is an Android app with two tabs:
 
 - **Listen** plays the phone microphone live into headphones with minimal latency and jitter. It has a volume slider and an optional zero-latency ambient-sound reducer.
-- **Conversation** transcribes the microphone **on the device** (sherpa-onnx), shows up to 4 speakers in different colors, and, if the user signs in with Google, keeps a Gemini summary of the last 15 minutes. Only transcript text goes to Gemini; audio never leaves the phone.
+- **Conversation** transcribes the microphone **on the device** (sherpa-onnx), shows up to 4 speakers in different colors, and keeps a summary of the last 15 minutes. The summary card has a **Local AI / Cloud AI** switch: Local uses Gemini Nano (ML Kit) where the phone has it, otherwise a Qwen3 0.6B model that the app downloads once and runs with LiteRT-LM; Cloud sends transcript text to Gemini after Google sign-in. Audio never leaves the phone in either mode.
 
 Both keep running with the screen off. The audio path is native C++ (Oboe); the UI, session logic and Gemini calls are Kotlin/Compose.
 
@@ -41,6 +41,8 @@ On-device speech models: the `fetchSpeechModels` task in `app/build.gradle.kts` 
 - **Size:** release builds are arm64-only (~107 MB APK); debug builds add x86_64 for the emulator. Models are `noCompress` so they load straight from the APK.
 - **Changing a model:** update the URL and its hash together.
 
+Local AI summary: `com.google.ai.edge.litertlm:litertlm-android` (ships arm64-v8a and x86_64 natives, so the emulator works on the CPU backend) and `com.google.mlkit:genai-prompt`. The model file is **not** in the APK: `transcribe/llm/ModelCatalog.kt` pins the Hugging Face URL, size and SHA-256 (from the resolve URL's `x-linked-size` / `x-linked-etag` headers) and `LocalModelManager` downloads it into `files/models/llm/` at runtime. Only ungated repositories work (Gemma 3 needs a licence click and a token).
+
 Firebase: `app/google-services.json` is per-developer and git-ignored. `app/build.gradle.kts` applies the google-services plugin **only if that file exists**, so the app always builds. Without it, `AuthRepository.isConfigured` is false; transcription still works and only the summary card says Firebase isn't set up. Because `R.string.default_web_client_id` exists only when the plugin runs, it is looked up by name at runtime.
 
 ## Architecture
@@ -66,6 +68,10 @@ The audio pipeline crosses three layers, and each layer has one owner:
   - The 0.55 threshold comes from a laptop evaluation: same-speaker similarity was ≥ 0.81 and different-speaker ≤ 0.35.
   - Utterances under 1 s are labelled but don't update a voice model.
   - Merged labels are never reused. `SpeakerRegistry` holds display names and merge aliases; a merge also folds the clusterer's voice models together.
+- **Summary back ends** all implement `Summarizer` and share `SummaryPrompt` (instructions, plus a 6000-char transcript budget for the small models) and `SummaryJson` (lenient parser: fences, `<think>` tags, key aliases, bullet-line fallback). `TranscriptionController.summarizeIfChanged()` picks the back end from `summaryMode` (SharedPreferences `summary_mode`; default Cloud when Firebase is configured, else Local).
+  - **`transcribe/llm/LocalModelManager`** probes ML Kit once (`checkStatus()`; any exception or `UNAVAILABLE`, as on the emulator, means LiteRT-LM), downloads the model with `ResumableDownloader` (plain `HttpURLConnection`, `Range` resume into a `.part`, size and SHA-256 check), and owns the LiteRT-LM engine on its own `llmThread`, separate from `speechThread` so transcription never stalls during a summary. The engine is kept across sessions and closed when the user switches to Cloud or deletes the model.
+  - **`LiteRtLmSummarizer`** uses CPU on x86_64 and tries GPU then CPU on arm64; one `Conversation` per summary, thinking disabled. **`NanoSummarizer`** uses the Prompt API with the same prompt.
+  - The download runs in the controller's scope with no extra foreground service: it survives rotation, and if the process dies the part file resumes on the next tap.
 - **`GeminiSummarizer`** is the only cloud call. It sends transcript text to Firebase AI Logic (`gemini-3.5-flash`, JSON schema, low thinking), and only when the user is signed in. In Kotlin, the SDK builders are `text()`/`inlineData()` and `Schema.string()`/`Schema.double()`; their JVM names (`addText`, `str`, `numDouble`) don't compile from Kotlin. Firebase AI Logic requires App Check: `AviFoneApp` installs the debug provider, and each install's token must be registered in the console.
 - **`MainActivity`** and **`ui/`**: `AppScaffold` holds the Listen/Conversation tabs and renders both controllers' state. The activity being stopped or destroyed does **not** stop either feature.
 
@@ -81,7 +87,8 @@ Couplings to keep in sync:
 
 - Keep the launcher icon in `res/mipmap-anydpi-v26/`. Lint calls the `-v26` suffix redundant, but moving it to `mipmap-anydpi` makes AAPT fail with "resource mipmap/ic_launcher not found".
 - `sdkmanager` is now a wrapper around Google's "Android CLI". It **exits 0 when a package name doesn't exist**, so verify installs on disk. Platform 37 is named `platforms;android-37.0`, not `android-37`.
-- The transcript is memory-only and pruned to 15 minutes, and audio never leaves the device. The consent flag in SharedPreferences is the only thing persisted. Keep it that way: the summary is scoped to personal, non-sensitive use on Gemini's free tier.
+- The transcript is memory-only and pruned to 15 minutes, and audio never leaves the device. Persisted: the consent flag and `summary_mode` in SharedPreferences, and the Local AI model under `files/models/llm/`. Keep it that way: the cloud summary is scoped to personal, non-sensitive use on Gemini's free tier.
+- The emulator AVD needs 4 GB or more of RAM for the Local AI model, and the first local summary there takes a minute or two on the x86_64 CPU.
 - The emulator's host-audio input proved unreliable on this machine: speech arrived ~30 dB quieter and missing most of its bass, or as pure digital silence. Test speech recognition with `LocalTranscriberTest` or a real phone, not the emulator mic.
 - The emulator has no headphone device, so Start stays disabled there. Testing on the emulator means temporarily making `ListenController.findHeadphones()` return a fake `Headphones(...)` instead of `null`, building, and then restoring the file. Never commit that override.
 - The emulator mic is silent unless it is launched with `-allow-host-audio`. With that flag it uses the host's default mic and its output goes to the host speakers, which howls. For audible demos, point it at a PulseAudio null-sink monitor playing a test file (`PULSE_SOURCE=<sink>.monitor`). Shut the emulator down before unloading the sink, or it falls back to the real mic.

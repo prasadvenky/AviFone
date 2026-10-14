@@ -35,9 +35,13 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -55,9 +59,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.avifone.transcribe.ConversationSummary
 import com.example.avifone.transcribe.ConversationUiState
+import com.example.avifone.transcribe.LocalEngine
+import com.example.avifone.transcribe.LocalModelState
 import com.example.avifone.transcribe.SpeakerInfo
+import com.example.avifone.transcribe.SummaryMode
 import com.example.avifone.transcribe.TranscriptLine
 import com.example.avifone.transcribe.TranscriptionController
 import java.text.DateFormat
@@ -110,6 +116,10 @@ fun ConversationScreen(controller: TranscriptionController) {
                 state = state,
                 onSignIn = { activity?.let(controller::signIn) },
                 onSignOut = controller::signOut,
+                onMode = controller::setSummaryMode,
+                onDownload = controller::downloadLocalModel,
+                onCancelDownload = controller::cancelDownload,
+                onDeleteModel = controller::deleteLocalModel,
             )
         }
         if (state.speakers.isNotEmpty()) {
@@ -194,7 +204,15 @@ private fun StatusRow(state: ConversationUiState) {
 }
 
 @Composable
-private fun SummaryCard(state: ConversationUiState, onSignIn: () -> Unit, onSignOut: () -> Unit) {
+private fun SummaryCard(
+    state: ConversationUiState,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onMode: (SummaryMode) -> Unit,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onDeleteModel: () -> Unit,
+) {
     val summary = state.summary
     var expanded by rememberSaveable { mutableStateOf(true) }
     Card(Modifier.fillMaxWidth()) {
@@ -214,39 +232,28 @@ private fun SummaryCard(state: ConversationUiState, onSignIn: () -> Unit, onSign
                 Text(if (expanded) "  ▲" else "  ▼", style = MaterialTheme.typography.labelMedium)
             }
             if (!expanded) return@Column
-            if (!state.firebaseConfigured) {
-                Text(
-                    "The AI summary needs Firebase: add app/google-services.json and rebuild (see " +
-                        "README). Transcription works without it.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                return@Column
-            }
-            val user = state.user
-            if (user == null) {
-                Text(
-                    "Sign in with Google to get an AI summary of the conversation. Only the " +
-                        "transcript text is sent to Gemini; audio stays on this phone.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Button(onClick = onSignIn, enabled = !state.signingIn, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (state.signingIn) "Signing in…" else "Sign in with Google")
+
+            SummaryModeSelector(state.summaryMode, onMode)
+            val usable = when (state.summaryMode) {
+                SummaryMode.CLOUD -> {
+                    CloudSection(state, onSignIn, onSignOut)
+                    state.firebaseConfigured && state.user != null
                 }
-                return@Column
+                SummaryMode.LOCAL -> {
+                    LocalSection(state, onDownload, onCancelDownload, onDeleteModel)
+                    state.localModel == LocalModelState.Ready
+                }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Signed in as ${user.email ?: user.name ?: "Google user"}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onSignOut) { Text("Sign out") }
-            }
+            if (!usable) return@Column
+
             if (summary == null) {
                 Text(
-                    "A summary of the conversation appears here about a minute after transcription starts.",
+                    "A summary of the conversation appears here about a minute after transcription " +
+                        "starts." + if (state.summaryMode == SummaryMode.LOCAL) {
+                            " The first one takes longer while the model loads."
+                        } else {
+                            ""
+                        },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -261,9 +268,150 @@ private fun SummaryCard(state: ConversationUiState, onSignIn: () -> Unit, onSign
                 Text("Action items & questions", style = MaterialTheme.typography.labelLarge)
                 summary.actionItems.forEach { Text("☐ $it", style = MaterialTheme.typography.bodyMedium) }
             }
+            state.summaryLabel?.let {
+                Text(
+                    "Written by $it",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
+
+@Composable
+private fun SummaryModeSelector(mode: SummaryMode, onMode: (SummaryMode) -> Unit) {
+    val modes = listOf(SummaryMode.LOCAL, SummaryMode.CLOUD)
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        modes.forEachIndexed { index, m ->
+            SegmentedButton(
+                selected = mode == m,
+                onClick = { onMode(m) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+            ) {
+                Text(if (m == SummaryMode.LOCAL) "Local AI" else "Cloud AI")
+            }
+        }
+    }
+}
+
+/** Gemini through Firebase: needs the project config and a signed-in Google account. */
+@Composable
+private fun CloudSection(state: ConversationUiState, onSignIn: () -> Unit, onSignOut: () -> Unit) {
+    if (!state.firebaseConfigured) {
+        Text(
+            "The cloud summary needs Firebase: add app/google-services.json and rebuild (see " +
+                "README). Transcription and Local AI work without it.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    val user = state.user
+    if (user == null) {
+        Text(
+            "Sign in with Google to get the summary from Gemini. Only the transcript text is " +
+                "sent; audio stays on this phone.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Button(onClick = onSignIn, enabled = !state.signingIn, modifier = Modifier.fillMaxWidth()) {
+            Text(if (state.signingIn) "Signing in…" else "Sign in with Google")
+        }
+        return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Signed in as ${user.email ?: user.name ?: "Google user"}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onSignOut) { Text("Sign out") }
+    }
+}
+
+/** A model on this phone: Gemini Nano where Android provides it, else a one-time download. */
+@Composable
+private fun LocalSection(
+    state: ConversationUiState,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onDeleteModel: () -> Unit,
+) {
+    val nano = state.localEngine == LocalEngine.NANO
+    val name = state.localModelName
+    when (val model = state.localModel) {
+        LocalModelState.Probing -> ProgressLine("Checking this device…")
+        is LocalModelState.NotDownloaded -> {
+            if (nano) {
+                Text(
+                    "This phone has Gemini Nano. Android downloads it once; nothing is sent anywhere.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) { Text("Get Gemini Nano") }
+            } else {
+                val total = model.totalBytes?.let(::mb) ?: "a one-time"
+                Text(
+                    "Summaries are written on this phone by $name ($total download, once). Keep " +
+                        "AviFone open while it downloads; nothing is sent anywhere.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        if (model.resumeBytes > 0 && model.totalBytes != null) {
+                            "Resume (${mb(model.resumeBytes)} of ${mb(model.totalBytes)})"
+                        } else {
+                            "Download $total"
+                        }
+                    )
+                }
+            }
+        }
+        is LocalModelState.Downloading -> {
+            val total = model.totalBytes
+            if (total != null && total > 0) {
+                LinearProgressIndicator(
+                    progress = { (model.bytes.toDouble() / total).toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (total != null) "${mb(model.bytes)} / ${mb(total)}" else "${mb(model.bytes)} so far",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onCancelDownload) { Text("Cancel") }
+            }
+        }
+        LocalModelState.Verifying -> ProgressLine("Verifying the download…")
+        is LocalModelState.Failed -> {
+            Text("Download failed: ${model.reason}", color = MaterialTheme.colorScheme.error)
+            Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) { Text("Retry") }
+        }
+        LocalModelState.Ready -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (nano) "Using Gemini Nano on this device" else "$name · on this device",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            if (!nano) TextButton(onClick = onDeleteModel) { Text("Delete model") }
+        }
+    }
+}
+
+@Composable
+private fun ProgressLine(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+        Text(text, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private fun mb(bytes: Long): String = "%.0f MB".format(bytes / 1_000_000.0)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -331,8 +479,10 @@ private fun ConsentDialog(onAgree: () -> Unit, onDismiss: () -> Unit) {
         title = { Text("Before you start") },
         text = {
             Text(
-                "Speech is transcribed on this phone; audio never leaves it. If you sign in, the " +
-                    "text of the last 15 minutes is sent to Google Gemini to write the summary.\n\n" +
+                "Speech is transcribed on this phone; audio never leaves it. The summary of the " +
+                    "last 15 minutes is written either on this phone (Local AI; a small model is " +
+                    "downloaded once) or, if you choose Cloud AI and sign in, by sending the " +
+                    "transcript text to Google Gemini.\n\n" +
                     "Make sure everyone being recorded agrees, and don't use the summary for " +
                     "confidential, customer or patient conversations. The transcript is kept only " +
                     "in memory, for the last 15 minutes."
