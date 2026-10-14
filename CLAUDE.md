@@ -13,7 +13,7 @@ AviFone is an Android app with a bottom navigation bar of three destinations:
 
 Both features keep running with the screen off. The audio path is native C++ (Oboe); the UI, session logic and Gemini calls are Kotlin/Compose.
 
-Branches: `main` carries the current app (3.0: on-device transcription, Local AI / Cloud AI summaries). The superseded design where Gemini transcribed audio in the cloud is commit `957c419` (the former `AI-Addition` branch, since deleted). `Local-S2T` is the development branch; `main` is fast-forwarded to it at each release.
+Branches: `main` carries the current app (3.2: on-device transcription with downloadable speech models, Local AI / Cloud AI summaries). The superseded design where Gemini transcribed audio in the cloud is commit `957c419` (the former `AI-Addition` branch, since deleted). `Local-S2T` is the development branch; `main` is fast-forwarded to it at each release.
 
 ## Environment and commands
 
