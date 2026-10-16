@@ -55,8 +55,9 @@ sound file (`--fast` without real-time pacing), `--source` picks a PulseAudio so
 window begin listening as soon as it opens.
 
 Laptop numbers (16 cores, 4 threads per model) are decode-time ratios of about 0.03 for
-Moonshine, 0.25 for Nemotron and 0.35 for Whisper small, so all three keep up with live speech
-together. They say nothing about phone speed; see `WerTest` for that.
+Moonshine, 0.25 for Nemotron, 0.35 for Whisper small and 0.5 for Whisper large-v3-turbo (each
+result about 2.5 s after the utterance ends), so all four keep up with live speech together.
+They say nothing about phone speed; see `WerTest` for that.
 
 ## `eval_asr.py` — word error rate of the app's pipeline
 
@@ -79,6 +80,7 @@ Results on the committed synthetic set (16 turns, 87 s, flite voices; laptop, 8 
 | moonshine-tiny | 11.5 % | 0.02 |
 | nemotron-3.5-560ms | 6.1 % | 0.28 |
 | whisper-small | 6.9 % (0.5 s pre-roll) | 0.31 |
+| whisper-turbo | 6.1 % (0.5 s pre-roll; via live_tester.py) | 0.49 |
 
 On the x86_64 emulator (`WerTest`): Moonshine 16.4 %, Nemotron 6.9 %, Whisper small 9.5 %, the
 two large models at RTF ~0.5.
