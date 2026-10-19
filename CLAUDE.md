@@ -32,8 +32,7 @@ export JAVA_HOME=~/Android/android-studio/jbr ANDROID_HOME=~/Android/Sdk
 
 - **Unit tests** (`app/src/test`) cover the pure-Kotlin logic: resampler, speaker clusterer, speaker registry, and transcript pruning. `org.json` is a stub in local unit tests, so the real library is a `testImplementation`.
 - **`LocalTranscriberTest`** (`app/src/androidTest`) runs the real bundled models on a synthetic 4-voice recording (`androidTest/assets/conversation4_16k.wav` plus `conversation4_truth.tsv`), feeding it straight into `LocalTranscriber` without the mic. It asserts 4 speakers, purity ≥ 0.9, and at least 14 of 16 turns recognized. On the emulator it takes ~10 s. The leave-installed flag stops the run from uninstalling the app and wiping its sign-in.
-- **`WerTest`** (`androidTest`) measures word error rate on `androidTest/assets/wer/manifest.tsv` (file, start, end, text) for the built-in model and every speech model present in `files/models/speech/` on the device (download them in Settings first; the leave-installed flag keeps them). The committed manifest is the synthetic recording; `tools/make_svarah_subset.py` adds Indian-English clips from Svarah (gated on Hugging Face, CC-BY-4.0). Baseline on the synthetic set (emulator, 2026-10-13): Moonshine tiny 16.4 %, Nemotron 3.5 6.9 % (RTF 0.5), Whisper small 9.5 % (RTF 0.5). Whisper large-v3-turbo is untested on a device.
-- **Desktop harness** `tools/eval_asr.py` runs the same VAD → recognizer pipeline on the laptop (`.venv` via `python3 -m virtualenv .venv && .venv/bin/pip install sherpa-onnx jiwer soundfile numpy`; models staged under `.gradle/speech-models/desktop/<id>/`, see `tools/README.md`). Use it to compare models or tune VAD/pre-roll before touching the app. **`tools/live_tester.py`** is a Tkinter window on the same pipeline that captures what the computer plays (PulseAudio monitor via `parec`) or a microphone and shows each ticked model's transcript side by side with decode times; paste a reference text to get WER. `--headless` runs it without a window. Model workers are joined on exit: a process that quits mid-decode aborts inside ONNX Runtime.
+- **Word error rate** (`WerTest`, `tools/eval_asr.py`, `tools/live_tester.py`) and **releases**: see the `speech-eval` skill.
 - **Native DSP** has no automated tests. It was verified by compiling `AmbientReducer.cpp` on the host with a throwaway `main`:
 `g++ -O2 -std=c++17 -Iapp/src/main/cpp test.cpp app/src/main/cpp/AmbientReducer.cpp`
 
@@ -105,7 +104,3 @@ Couplings to keep in sync:
 - The emulator mic is silent unless it is launched with `-allow-host-audio`. With that flag it uses the host's default mic and its output goes to the host speakers, which howls. For audible demos, point it at a PulseAudio null-sink monitor playing a test file (`PULSE_SOURCE=<sink>.monitor`). Shut the emulator down before unloading the sink, or it falls back to the real mic.
 - Emulator latency (~145 ms, 960-frame bursts, no MMAP) says nothing about real devices.
 - Bluetooth output is allowed but adds 100–300 ms; the UI warns about it.
-
-## Releases
-
-`dist/` is git-ignored and holds local APKs and demo media. Release notes list the measured WER from `WerTest` / `tools/eval_asr.py` for the shipped models. Releases are GitHub Releases on `prasadvenky/AviFone` made with `gh` (installed in `~/.local/bin`). The APK attached to `v1.0` is debug-key signed, and a proper release keystore has not been set up yet. Commits are authored as `prasadvenky <venkateshprasad13@gmail.com>` (repo-local git config).
